@@ -319,6 +319,8 @@ enum DetectKeywordId {
     DETECT_AL_IKE_NONCE,
     DETECT_AL_IKE_KEY_EXCHANGE,
 
+    DETECT_EVENT,
+
     /* make sure this stays last */
     DETECT_TBLSIZE,
 };
