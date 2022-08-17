@@ -608,6 +608,8 @@ typedef struct Signature_ {
 
     char *sig_str;
 
+    char *eventstr;
+
     SignatureInitData *init_data;
 
     /** ptr to the next sig in the list */
