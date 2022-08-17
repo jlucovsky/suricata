@@ -132,6 +132,7 @@
 #include "detect-flowint.h"
 #include "detect-pktvar.h"
 #include "detect-noalert.h"
+#include "detect-event.h"
 #include "detect-flowbits.h"
 #include "detect-hostbits.h"
 #include "detect-xbits.h"
@@ -559,6 +560,7 @@ void SigTableSetup(void)
     DetectFlowintRegister();
     DetectPktvarRegister();
     DetectNoalertRegister();
+    DetectEventRegister();
     DetectFlowbitsRegister();
     DetectHostbitsRegister();
     DetectXbitsRegister();
