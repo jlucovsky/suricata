@@ -753,6 +753,7 @@ libsuricata_c_a_SOURCES = \
 	detect-engine-tag.c \
 	detect-engine-threshold.c \
 	detect-engine-uint.c \
+	detect-event.c \
 	detect-fast-pattern.c \
 	detect-file-data.c \
 	detect-fileext.c \
