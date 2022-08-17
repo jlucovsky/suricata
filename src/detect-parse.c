@@ -1454,6 +1454,9 @@ void SigFree(DetectEngineCtx *de_ctx, Signature *s)
     if (s->sig_str != NULL) {
         SCFree(s->sig_str);
     }
+    if (s->eventstr != NULL) {
+        SCFree(s->eventstr);
+    }
 
     SigRefFree(s);
     SigMetadataFree(s);
