@@ -390,6 +390,9 @@ void AlertJsonHeader(void *ctx, const Packet *p, const PacketAlert *pa, JsonBuil
     if ((json_output_ctx != NULL) && (flags & LOG_JSON_RULE_METADATA)) {
         AlertJsonMetadata(json_output_ctx, pa, js);
     }
+    if (pa->s->eventstr) {
+        jb_set_string(js, "event_name", pa->s->eventstr);
+    }
 
     if (flags & LOG_JSON_RULE) {
         jb_set_string(js, "rule", pa->s->sig_str);
