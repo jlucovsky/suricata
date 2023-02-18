@@ -537,6 +537,23 @@ static void SigNumArrayPrint(void *tmp)
     }
 }
 
+static void SigNumArrayPrintInfo(void *tmp, DetectEngineCtx *de_ctx)
+{
+    Signature **sigs = de_ctx->sig_array;
+    SigNumArray *sna = (SigNumArray *)tmp;
+    for (uint32_t u = 0; u < sna->size; u++) {
+        uint8_t bitarray = sna->array[u];
+        for (uint8_t i = 0; i < 8; i++) {
+            if (bitarray & 0x01) {
+                uint32_t orig = de_ctx->io_ctx.sig_mapping[u*8+1];
+                Signature *s = sigs[orig];
+                printf("  potential rule: (%d) (orig %d) %"PRIu32" (%s)\n", u*8+1, orig, s->id, s->msg);
+            }
+            bitarray = bitarray >> 1;
+        }
+    }
+}
+
 /**
  * \brief This function creates a new SigNumArray with the
  *        size fixed to the io_ctx->max_idx
@@ -883,6 +900,28 @@ void IPOnlyInit(DetectEngineCtx *de_ctx, DetectEngineIPOnlyCtx *io_ctx)
                                                   SigNumArrayPrint);
     io_ctx->tree_ipv6dst = SCRadixCreateRadixTree(SigNumArrayFree,
                                                   SigNumArrayPrint);
+
+    io_ctx->sig_mapping = SCMalloc(50000); //FIXME: number of sigs? len(de_ctx->sig_array?)
+    memset(io_ctx->sig_mapping, 0, 50000); //FIXME: SCMalloc doesn't zero?
+    io_ctx->sig_mapping_size = 0;
+}
+
+uint32_t IPOnlyTrackSigNum(DetectEngineIPOnlyCtx *io_ctx, SigIntId signum)
+{
+    //printf("XXXXX Looking for %d\n", signum);
+    for (uint32_t i = 0; i <  io_ctx->sig_mapping_size ; i++) {
+        if (io_ctx->sig_mapping[i] == signum){
+            //printf("XXXXX found %d at index %d\n", io_ctx->sig_mapping[i], i);
+            return i;
+        } else {
+            //printf("XXXXX skipping %d at index %d\n", io_ctx->sig_mapping[i], i);
+        }
+    }
+
+    io_ctx->sig_mapping[io_ctx->sig_mapping_size++] = signum;
+
+    //printf("XXXXX Adding %d at index %d\n", signum, io_ctx->sig_mapping_size);
+    return io_ctx->sig_mapping_size;
 }
 
 /**
@@ -942,6 +981,10 @@ void IPOnlyDeinit(DetectEngineCtx *de_ctx, DetectEngineIPOnlyCtx *io_ctx)
     if (io_ctx->tree_ipv6dst != NULL)
         SCRadixReleaseRadixTree(io_ctx->tree_ipv6dst);
     io_ctx->tree_ipv6dst = NULL;
+
+    if (io_ctx->sig_mapping != NULL)
+        SCFree(io_ctx->sig_mapping);
+    io_ctx->sig_mapping = NULL;
 }
 
 /**
@@ -1022,24 +1065,35 @@ void IPOnlyMatchPacket(ThreadVars *tv,
     if (src == NULL || dst == NULL)
         SCReturn;
 
+    //printf("\nHere in IPOnlyMatchPacket! %d\n", src->size);
     uint32_t u;
+    uint32_t iterations = 0;
+    //printf("src sigs:\n");
+    //SigNumArrayPrintInfo(src, de_ctx);
+    //printf("\n");
+    //printf("dst sigs:\n");
+    //SigNumArrayPrintInfo(dst, de_ctx);
+    //printf("\n");
+    uint8_t bitarray;
     for (u = 0; u < src->size; u++) {
+        ++iterations;
+        //printf("u=%d And %"PRIu8" & %"PRIu8"\n", u, src->array[u], dst->array[u]);
         SCLogDebug("And %"PRIu8" & %"PRIu8, src->array[u], dst->array[u]);
 
         /* The final results will be at io_tctx */
-        io_tctx->sig_match_array[u] = dst->array[u] & src->array[u];
+        bitarray = dst->array[u] & src->array[u];
 
         /* We have to move the logic of the signature checking
          * to the main detect loop, in order to apply the
          * priority of actions (pass, drop, reject, alert) */
-        if (io_tctx->sig_match_array[u] != 0) {
+        if (bitarray) {
             /* We have a match :) Let's see from which signum's */
-            uint8_t bitarray = io_tctx->sig_match_array[u];
+            //printf("   We have a match! the bitarray is %d\n", bitarray);
             uint8_t i = 0;
 
             for (; i < 8; i++, bitarray = bitarray >> 1) {
                 if (bitarray & 0x01) {
-                    Signature *s = de_ctx->sig_array[u * 8 + i];
+                    Signature *s = de_ctx->sig_array[io_ctx->sig_mapping[u * 8 + i]];
 
                     if ((s->proto.flags & DETECT_PROTO_IPV4) && !PKT_IS_IPV4(p)) {
                         SCLogDebug("ip version didn't match");
@@ -1111,6 +1165,7 @@ void IPOnlyMatchPacket(ThreadVars *tv,
             }
         }
     }
+    //printf("end, iterations=%d\n", iterations);
     SCReturn;
 }
 
@@ -1548,10 +1603,12 @@ void IPOnlyAddSignature(DetectEngineCtx *de_ctx, DetectEngineIPOnlyCtx *io_ctx,
     if (!(s->flags & SIG_FLAG_IPONLY))
         return;
 
+    uint32_t mapped_signum = IPOnlyTrackSigNum(io_ctx, s->num);
+    printf("XXXXX adding ips from rule: %"PRIu32" (%s) as %"PRIu32" mapped to %"PRIu32"\n", s->id, s->msg, s->num, mapped_signum);
     /* Set the internal signum to the list before merging */
-    IPOnlyCIDRListSetSigNum(s->cidr_src, s->num);
+    IPOnlyCIDRListSetSigNum(s->cidr_src, mapped_signum);
 
-    IPOnlyCIDRListSetSigNum(s->cidr_dst, s->num);
+    IPOnlyCIDRListSetSigNum(s->cidr_dst, mapped_signum);
 
     /**
      * ipv4 and ipv6 are mixed, but later we will separate them into
@@ -1560,8 +1617,8 @@ void IPOnlyAddSignature(DetectEngineCtx *de_ctx, DetectEngineIPOnlyCtx *io_ctx,
     io_ctx->ip_src = IPOnlyCIDRItemInsert(io_ctx->ip_src, s->cidr_src);
     io_ctx->ip_dst = IPOnlyCIDRItemInsert(io_ctx->ip_dst, s->cidr_dst);
 
-    if (s->num > io_ctx->max_idx)
-        io_ctx->max_idx = s->num;
+    if (mapped_signum > io_ctx->max_idx)
+        io_ctx->max_idx = mapped_signum;
 
     /** no longer ref to this, it's in the table now */
     s->cidr_src = NULL;

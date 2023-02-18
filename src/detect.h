@@ -716,6 +716,8 @@ typedef struct DetectEngineIPOnlyCtx_ {
     /* Used to build the radix trees */
     IPOnlyCIDRItem *ip_src, *ip_dst;
     uint32_t max_idx;
+    uint32_t *sig_mapping;
+    uint32_t sig_mapping_size;
 } DetectEngineIPOnlyCtx;
 
 typedef struct DetectEngineLookupFlow_ {
