@@ -906,11 +906,11 @@ void IPOnlyInit(DetectEngineCtx *de_ctx, DetectEngineIPOnlyCtx *io_ctx)
     io_ctx->sig_mapping_size = 0;
 }
 
-uint32_t IPOnlyTrackSigNum(DetectEngineIPOnlyCtx *io_ctx, SigIntId signum)
+SigIntId IPOnlyTrackSigNum(DetectEngineIPOnlyCtx *io_ctx, SigIntId signum)
 {
     //printf("XXXXX Adding %d at index %d\n", signum, io_ctx->sig_mapping_size);
 
-    uint32_t loc = io_ctx->sig_mapping_size;
+    SigIntId loc = io_ctx->sig_mapping_size;
     io_ctx->sig_mapping[loc] = signum;
     io_ctx->sig_mapping_size++;
     return loc;
@@ -1595,8 +1595,8 @@ void IPOnlyAddSignature(DetectEngineCtx *de_ctx, DetectEngineIPOnlyCtx *io_ctx,
     if (!(s->flags & SIG_FLAG_IPONLY))
         return;
 
-    uint32_t mapped_signum = IPOnlyTrackSigNum(io_ctx, s->num);
-    printf("XXXXX adding ips from rule: %"PRIu32" (%s) as %"PRIu32" mapped to %"PRIu32"\n", s->id, s->msg, s->num, mapped_signum);
+    SigIntId mapped_signum = IPOnlyTrackSigNum(io_ctx, s->num);
+    //printf("XXXXX adding ips from rule: %"PRIu32" (%s) as %"PRIu32" mapped to %"PRIu32"\n", s->id, s->msg, s->num, mapped_signum);
     /* Set the internal signum to the list before merging */
     IPOnlyCIDRListSetSigNum(s->cidr_src, mapped_signum);
 
