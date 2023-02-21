@@ -908,20 +908,12 @@ void IPOnlyInit(DetectEngineCtx *de_ctx, DetectEngineIPOnlyCtx *io_ctx)
 
 uint32_t IPOnlyTrackSigNum(DetectEngineIPOnlyCtx *io_ctx, SigIntId signum)
 {
-    //printf("XXXXX Looking for %d\n", signum);
-    for (uint32_t i = 0; i <  io_ctx->sig_mapping_size ; i++) {
-        if (io_ctx->sig_mapping[i] == signum){
-            //printf("XXXXX found %d at index %d\n", io_ctx->sig_mapping[i], i);
-            return i;
-        } else {
-            //printf("XXXXX skipping %d at index %d\n", io_ctx->sig_mapping[i], i);
-        }
-    }
-
-    io_ctx->sig_mapping[io_ctx->sig_mapping_size++] = signum;
-
     //printf("XXXXX Adding %d at index %d\n", signum, io_ctx->sig_mapping_size);
-    return io_ctx->sig_mapping_size;
+
+    uint32_t loc = io_ctx->sig_mapping_size;
+    io_ctx->sig_mapping[loc] = signum;
+    io_ctx->sig_mapping_size++;
+    return loc;
 }
 
 /**
