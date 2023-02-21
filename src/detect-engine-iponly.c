@@ -901,8 +901,8 @@ void IPOnlyInit(DetectEngineCtx *de_ctx, DetectEngineIPOnlyCtx *io_ctx)
     io_ctx->tree_ipv6dst = SCRadixCreateRadixTree(SigNumArrayFree,
                                                   SigNumArrayPrint);
 
-    io_ctx->sig_mapping = SCMalloc(50000); //FIXME: number of sigs? len(de_ctx->sig_array?)
-    memset(io_ctx->sig_mapping, 0, 50000); //FIXME: SCMalloc doesn't zero?
+    io_ctx->sig_mapping = SCMalloc(100000); //FIXME: number of sigs? len(de_ctx->sig_array?)
+    memset(io_ctx->sig_mapping, 0, 100000); //FIXME: SCMalloc doesn't zero?
     io_ctx->sig_mapping_size = 0;
 }
 
