@@ -537,6 +537,7 @@ static void SigNumArrayPrint(void *tmp)
     }
 }
 
+#if 0
 static void SigNumArrayPrintInfo(void *tmp, DetectEngineCtx *de_ctx)
 {
     Signature **sigs = de_ctx->sig_array;
@@ -553,6 +554,7 @@ static void SigNumArrayPrintInfo(void *tmp, DetectEngineCtx *de_ctx)
         }
     }
 }
+#endif
 
 /**
  * \brief This function creates a new SigNumArray with the
@@ -905,6 +907,8 @@ void IPOnlyInit(DetectEngineCtx *de_ctx, DetectEngineIPOnlyCtx *io_ctx)
     memset(io_ctx->sig_mapping, 0, 100000); //FIXME: SCMalloc doesn't zero?
     io_ctx->sig_mapping_size = 0;
 }
+
+SigIntId IPOnlyTrackSigNum(DetectEngineIPOnlyCtx *io_ctx, SigIntId signum);
 
 SigIntId IPOnlyTrackSigNum(DetectEngineIPOnlyCtx *io_ctx, SigIntId signum)
 {
