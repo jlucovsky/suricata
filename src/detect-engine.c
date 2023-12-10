@@ -2266,18 +2266,46 @@ int DetectEngineInspectPktBufferGeneric(
 }
 
 /** \internal
- *  \brief inject a pseudo packet into each detect thread that doesn't use the
- *         new det_ctx yet
+ *  \brief inject a pseudo packet into each detect thread
+ *         if the thread should flush its output logs.
  */
-static void InjectPackets(ThreadVars **detect_tvs,
-                          DetectEngineThreadCtx **new_det_ctx,
-                          int no_of_detect_tvs)
+void InjectPacketsForFlush(ThreadVars **detect_tvs, int no_of_detect_tvs)
 {
-    /* inject a fake packet if the detect thread isn't using the new ctx yet,
-     * this speeds up the process */
+    /* inject a fake packet if the detect thread that needs it. This function
+     * is called when a heartbeat log-flush request has been made
+     * and it should process a pseudo packet and flush its output logs
+     * to speed the process. */
     for (int i = 0; i < no_of_detect_tvs; i++) {
-        if (SC_ATOMIC_GET(new_det_ctx[i]->so_far_used_by_detect) != 1) {
-            if (detect_tvs[i]->inq != NULL) {
+        if (detect_tvs[i] && detect_tvs[i]->inq != NULL) {
+            Packet *p = PacketGetFromAlloc();
+            if (p != NULL) {
+                p->flags |= PKT_PSEUDO_STREAM_END;
+                p->flags |= PKT_PSEUDO_LOG_FLUSH;
+                PKT_SET_SRC(p, PKT_SRC_DETECT_RELOAD_FLUSH);
+                PacketQueue *q = detect_tvs[i]->inq->pq;
+                SCMutexLock(&q->mutex_q);
+                PacketEnqueue(q, p);
+                SCCondSignal(&q->cond_q);
+                SCMutexUnlock(&q->mutex_q);
+            }
+        }
+    }
+}
+
+/** \internal
+ *  \brief inject a pseudo packet into each detect thread
+ *      -that doesn't use the new det_ctx yet
+ */
+static void InjectPackets(
+        ThreadVars **detect_tvs, DetectEngineThreadCtx **new_det_ctx, int no_of_detect_tvs)
+{
+    /* inject a fake packet if the detect thread that needs it. This function
+     * is called if
+     *  - A thread isn't using a DE ctx and should
+     * to speed the process. */
+    for (int i = 0; i < no_of_detect_tvs; i++) {
+        if (new_det_ctx[i] && SC_ATOMIC_GET(new_det_ctx[i]->so_far_used_by_detect) != 1) {
+            if (detect_tvs[i] && detect_tvs[i]->inq != NULL) {
                 Packet *p = PacketGetFromAlloc();
                 if (p != NULL) {
                     p->flags |= PKT_PSEUDO_STREAM_END;
@@ -2403,7 +2431,7 @@ retry:
         if (SC_ATOMIC_GET(new_det_ctx[i]->so_far_used_by_detect) == 1) {
             SCLogDebug("new_det_ctx - %p used by detect engine", new_det_ctx[i]);
             threads_done++;
-        } else {
+        } else if (detect_tvs[i]) {
             TmThreadsCaptureBreakLoop(detect_tvs[i]);
         }
     }
