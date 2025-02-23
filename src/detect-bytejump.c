@@ -488,6 +488,10 @@ static int DetectBytejumpSetup(DetectEngineCtx *de_ctx, Signature *s, const char
 
         if (data->flags & DETECT_BYTEJUMP_RELATIVE) {
             prev_pm = DetectGetLastSMFromLists(s, DETECT_CONTENT, DETECT_PCRE, -1);
+            if (!prev_pm) {
+                SCLogNotice("unable to find a prev content/pcre match" );
+                goto error;
+            }
         }
     } else if (data->flags & DETECT_BYTEJUMP_DCE) {
         if (data->flags & DETECT_BYTEJUMP_RELATIVE) {
