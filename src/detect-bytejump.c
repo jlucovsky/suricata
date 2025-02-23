@@ -470,12 +470,11 @@ error:
 static int DetectBytejumpSetup(DetectEngineCtx *de_ctx, Signature *s, const char *optstr)
 {
     SigMatch *prev_pm = NULL;
-    DetectBytejumpData *data = NULL;
     char *offset = NULL;
     char *nbytes = NULL;
     int ret = -1;
 
-    data = DetectBytejumpParse(de_ctx, optstr, &nbytes, &offset);
+    DetectBytejumpData *data = DetectBytejumpParse(de_ctx, optstr, &nbytes, &offset);
     if (data == NULL)
         goto error;
 
@@ -489,8 +488,9 @@ static int DetectBytejumpSetup(DetectEngineCtx *de_ctx, Signature *s, const char
         if (data->flags & DETECT_BYTEJUMP_RELATIVE) {
             prev_pm = DetectGetLastSMFromLists(s, DETECT_CONTENT, DETECT_PCRE, -1);
             if (!prev_pm) {
-                SCLogNotice("unable to find a prev content/pcre match" );
-                goto error;
+                SCLogError("relative specified without "
+                           "previous pattern match");
+                //goto error;
             }
         }
     } else if (data->flags & DETECT_BYTEJUMP_DCE) {
@@ -545,6 +545,14 @@ static int DetectBytejumpSetup(DetectEngineCtx *de_ctx, Signature *s, const char
         }
     }
 
+    {
+        SigMatch *prev_bed_sm = DetectGetLastSMByListId(s, sm_list,
+                DETECT_BYTE_EXTRACT, -1);
+        if (prev_bed_sm == NULL) {
+            SCLogNotice("no prev bed match");
+            goto error;
+        }
+    }
     if (nbytes != NULL) {
         DetectByteIndexType index;
         if (!DetectByteRetrieveSMVar(nbytes, s, &index)) {
@@ -572,6 +580,7 @@ static int DetectBytejumpSetup(DetectEngineCtx *de_ctx, Signature *s, const char
         offset = NULL;
     }
 
+    SCLogNotice("adding byte_jump to list %d", sm_list);
     if (SigMatchAppendSMToList(de_ctx, s, DETECT_BYTEJUMP, (SigMatchCtx *)data, sm_list) == NULL) {
         goto error;
     }
