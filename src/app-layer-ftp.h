@@ -71,6 +71,7 @@ typedef struct FTPTransaction_  {
     /* for the command description */
     FtpCommandInfo command_descriptor;
 
+    char *dyn_port_str;
     uint16_t dyn_port; /* dynamic port, if applicable */
     bool done; /* transaction complete? */
     bool active; /* active or passive mode */
