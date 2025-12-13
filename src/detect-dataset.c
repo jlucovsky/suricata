@@ -235,6 +235,8 @@ static int DetectDatasetParse(const char *str, char *cmd, int cmd_len, char *nam
                     *type = DATASET_TYPE_IPV6;
                 } else if (strcmp(val, "ip") == 0) {
                     *type = DATASET_TYPE_IPV6;
+                } else if (strcmp(val, "cidr") == 0) {
+                    *type = DATASET_TYPE_CIDR;
                 } else {
                     SCLogError("bad type %s", val);
                     return -1;

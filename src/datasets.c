@@ -31,6 +31,7 @@
 #include "datasets-ipv6.h"
 #include "datasets-md5.h"
 #include "datasets-sha256.h"
+#include "datasets-cidr.h"
 #include "datasets-reputation.h"
 #include "datasets-context-json.h"
 #include "util-conf.h"
@@ -73,6 +74,8 @@ enum DatasetTypes DatasetGetTypeFromString(const char *s)
         return DATASET_TYPE_IPV4;
     if (strcasecmp("ip", s) == 0)
         return DATASET_TYPE_IPV6;
+    if (strcasecmp("cidr", s) == 0)
+        return DATASET_TYPE_CIDR;
     return DATASET_TYPE_NOTSET;
 }
 
@@ -186,9 +189,6 @@ int DatasetParseIpv6String(Dataset *set, const char *line, struct in6_addr *in6)
 
 static int DatasetLoadIPv6(Dataset *set)
 {
-    if (strlen(set->load) == 0)
-        return 0;
-
     SCLogConfig("dataset: %s loading from '%s'", set->name, set->load);
     const char *fopen_mode = "r";
     if (strlen(set->save) > 0 && strcmp(set->save, set->load) == 0) {
@@ -266,6 +266,40 @@ static int DatasetLoadString(Dataset *set)
     }
 
     int retval = ParseDatasets(set, set->name, set->load, fopen_mode, DSString);
+    if (retval == -2) {
+        FatalErrorOnInit("dataset %s could not be processed", set->name);
+    } else if (retval == -1) {
+        return -1;
+    }
+
+    THashConsolidateMemcap(set->hash);
+
+    return 0;
+}
+
+static int DatasetLoadCIDR(Dataset *set)
+{
+    // Initialize the CIDR hash entry with empty radix trees
+    // This ensures the entry exists even if no CIDRs are loaded from file
+    CIDRType lookup;
+    memset(&lookup, 0, sizeof(lookup));
+    struct THashDataGetResult res = THashGetFromHash(set->hash, &lookup);
+    if (res.data) {
+        THashDecrUsecnt(res.data);
+        THashDataUnlock(res.data);
+    }
+
+    if (strlen(set->load) == 0)
+        return 0;
+
+    SCLogConfig("dataset: %s loading from '%s'", set->name, set->load);
+
+    const char *fopen_mode = "r";
+    if (strlen(set->save) > 0 && strcmp(set->save, set->load) == 0) {
+        fopen_mode = "a+";
+    }
+
+    int retval = ParseDatasets(set, set->name, set->load, fopen_mode, DSCIDR);
     if (retval == -2) {
         FatalErrorOnInit("dataset %s could not be processed", set->name);
     } else if (retval == -1) {
@@ -508,6 +542,14 @@ Dataset *DatasetGet(const char *name, enum DatasetTypes type, const char *save, 
             if (set->hash == NULL)
                 goto out_err;
             if (DatasetLoadIPv6(set) < 0)
+                goto out_err;
+            break;
+        case DATASET_TYPE_CIDR:
+            set->hash = THashInit(cnf_name, sizeof(CIDRType), CIDRSet, CIDRFree, CIDRHash,
+                    CIDRCompare, NULL, NULL, load != NULL ? 1 : 0, memcap, hashsize);
+            if (set->hash == NULL)
+                goto out_err;
+            if (DatasetLoadCIDR(set) < 0)
                 goto out_err;
             break;
     }
@@ -762,6 +804,17 @@ int DatasetsInit(void)
                 }
                 SCLogDebug("dataset %s: id %u type %s", set_name, dset->id, set_type->val);
                 dset->from_yaml = true;
+
+            } else if (strcmp(set_type->val, "cidr") == 0) {
+                Dataset *dset = DatasetGet(set_name, DATASET_TYPE_CIDR, save, load,
+                        memcap > 0 ? memcap : default_memcap,
+                        hashsize > 0 ? hashsize : default_hashsize);
+                if (dset == NULL) {
+                    FatalErrorOnInit("failed to setup dataset for %s", set_name);
+                    continue;
+                }
+                SCLogDebug("dataset %s: id %u type %s", set_name, dset->id, set_type->val);
+                dset->from_yaml = true;
             }
 
             list_pos++;
@@ -879,6 +932,9 @@ void DatasetsSave(void)
                 break;
             case DATASET_TYPE_IPV6:
                 THashWalk(set->hash, IPv6AsAscii, SaveCallback, fp);
+                break;
+            case DATASET_TYPE_CIDR:
+                SCLogWarning("saving CIDR dataset %s is not implemented", set->name);
                 break;
         }
 
@@ -1092,6 +1148,54 @@ static DataRepResultType DatasetLookupSha256wRep(Dataset *set,
     return rrep;
 }
 
+static int DatasetLookupCIDR(Dataset *set, const uint8_t *data, const uint32_t data_len)
+{
+    if (set == NULL)
+        return -1;
+
+    if (data_len != 4 && data_len != 16)
+        return -1;
+
+    // Get the CIDR dataset from the hash
+    // Since CIDR datasets are stored uniquely, we just need to get the first entry
+    CIDRType lookup;
+    memset(&lookup, 0, sizeof(lookup));
+    THashData *rdata = THashLookupFromHash(set->hash, &lookup);
+    if (rdata) {
+        CIDRType *cidr = rdata->data;
+        bool found = false;
+
+        if (data_len == 4) {
+            found = CIDRLookupIPv4(cidr, data);
+        } else if (data_len == 16) {
+            found = CIDRLookupIPv6(cidr, data);
+        }
+
+        DatasetUnlockData(rdata);
+        return found ? 1 : 0;
+    }
+    return 0;
+}
+
+static DataRepResultType DatasetLookupCIDRwRep(
+        Dataset *set, const uint8_t *data, const uint32_t data_len, const DataRepType *rep)
+{
+    DataRepResultType rrep = { .found = false, .rep = 0 };
+
+    if (set == NULL)
+        return rrep;
+
+    // For CIDR datasets, we don't support reputation at this time
+    // Just do a simple lookup
+    int result = DatasetLookupCIDR(set, data, data_len);
+    if (result == 1) {
+        rrep.found = true;
+        rrep.rep = 0;
+    }
+
+    return rrep;
+}
+
 /**
  *  \brief see if \a data is part of the set
  *  \param set dataset
@@ -1117,6 +1221,8 @@ int DatasetLookup(Dataset *set, const uint8_t *data, const uint32_t data_len)
             return DatasetLookupIPv4(set, data, data_len);
         case DATASET_TYPE_IPV6:
             return DatasetLookupIPv6(set, data, data_len);
+        case DATASET_TYPE_CIDR:
+            return DatasetLookupCIDR(set, data, data_len);
     }
     return -1;
 }
@@ -1139,6 +1245,8 @@ DataRepResultType DatasetLookupwRep(Dataset *set, const uint8_t *data, const uin
             return DatasetLookupIPv4wRep(set, data, data_len, rep);
         case DATASET_TYPE_IPV6:
             return DatasetLookupIPv6wRep(set, data, data_len, rep);
+        case DATASET_TYPE_CIDR:
+            return DatasetLookupCIDRwRep(set, data, data_len, rep);
     }
     return rrep;
 }
@@ -1335,6 +1443,31 @@ static int DatasetAddSha256(Dataset *set, const uint8_t *data, const uint32_t da
     return -1;
 }
 
+static int DatasetAddCIDR(Dataset *set, const uint8_t *data, const uint32_t data_len)
+{
+    if (set == NULL)
+        return -1;
+
+    // Note: For CIDR datasets, 'data' should be a null-terminated string
+    // containing the CIDR notation (e.g., "192.168.1.0/24" or "2001:db8::/32")
+    // This is different from other dataset types that use binary data.
+
+    // This function is not typically used for CIDR datasets directly.
+    // CIDR entries are added through the Rust ParseDatasets function.
+    SCLogWarning("DatasetAddCIDR: direct addition not supported, use dataset loading");
+    return -1;
+}
+
+static int DatasetAddCIDRwRep(
+        Dataset *set, const uint8_t *data, const uint32_t data_len, const DataRepType *rep)
+{
+    if (set == NULL)
+        return -1;
+
+    // CIDR datasets don't support reputation values
+    return DatasetAddCIDR(set, data, data_len);
+}
+
 int SCDatasetAdd(Dataset *set, const uint8_t *data, const uint32_t data_len)
 {
     if (set == NULL)
@@ -1351,6 +1484,8 @@ int SCDatasetAdd(Dataset *set, const uint8_t *data, const uint32_t data_len)
             return DatasetAddIPv4(set, data, data_len);
         case DATASET_TYPE_IPV6:
             return DatasetAddIPv6(set, data, data_len);
+        case DATASET_TYPE_CIDR:
+            return DatasetAddCIDR(set, data, data_len);
     }
     return -1;
 }
@@ -1372,6 +1507,8 @@ int SCDatasetAddwRep(
             return DatasetAddIPv4wRep(set, data, data_len, rep);
         case DATASET_TYPE_IPV6:
             return DatasetAddIPv6wRep(set, data, data_len, rep);
+        case DATASET_TYPE_CIDR:
+            return DatasetAddCIDRwRep(set, data, data_len, rep);
     }
     return -1;
 }
@@ -1419,6 +1556,9 @@ static int DatasetOpSerialized(Dataset *set, const char *string, DatasetOpFunc D
                 return -2;
             return DatasetOpSha256(set, hash, 32);
         }
+        case DATASET_TYPE_CIDR:
+            SCLogWarning("serialized CIDR operations are not supported for set %s", set->name);
+            return -1;
         case DATASET_TYPE_IPV4: {
             struct in_addr in;
             if (inet_pton(AF_INET, string, &in) != 1)
@@ -1554,6 +1694,9 @@ int DatasetRemove(Dataset *set, const uint8_t *data, const uint32_t data_len)
             return DatasetRemoveIPv4(set, data, data_len);
         case DATASET_TYPE_IPV6:
             return DatasetRemoveIPv6(set, data, data_len);
+        case DATASET_TYPE_CIDR:
+            SCLogWarning("removing CIDR entries via API is not supported for set %s", set->name);
+            return -1;
     }
     return -1;
 }
