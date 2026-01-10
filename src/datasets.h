@@ -61,6 +61,7 @@ typedef struct Dataset {
     bool hidden;                        /* Mark the old sets hidden in case of reload */
     bool remove_key;                    /* Mark that value key should be removed from extra data */
     THashTableContext *hash;
+    void *cidr_data;                    /* Cached CIDR radix tree pointer for fast lookups */
 
     char load[PATH_MAX];
     char save[PATH_MAX];

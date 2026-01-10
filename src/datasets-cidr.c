@@ -92,6 +92,7 @@ int CIDRAddIPv4String(CIDRType *cidr, const char *ip_str)
         return -1;
     }
 
+    SCLogNotice("Adding IPvv CIDR: %s", ip_str);
     // Use the existing radix tree function to add the string
     // This handles both single IPs and CIDR notation
     if (SCRadix4AddKeyIPV4String(&cidr->ipv4_tree, &radix4_cfg, ip_str, NULL)) {
@@ -114,6 +115,7 @@ int CIDRAddIPv6String(CIDRType *cidr, const char *ip_str)
         return -1;
     }
 
+    SCLogNotice("Adding IPv6 CIDR: %s", ip_str);
     // Use the existing radix tree function to add the string
     // This handles both single IPs and CIDR notation
     if (SCRadix6AddKeyIPV6String(&cidr->ipv6_tree, &radix6_cfg, ip_str, NULL)) {
@@ -132,6 +134,9 @@ int CIDRAddIPv6String(CIDRType *cidr, const char *ip_str)
  */
 bool CIDRLookupIPv4(const CIDRType *cidr, const uint8_t *addr)
 {
+    char addr_out[16] = "";
+    PrintInet(AF_INET, addr, addr_out, sizeof(addr_out));
+    SCLogNotice("Searching for IPv4 addr %s", addr_out);
     if (cidr == NULL || addr == NULL) {
         return false;
     }
@@ -191,19 +196,22 @@ int DatasetAddCIDRString(Dataset *set, const char *cidr_str)
     }
 
     CIDRType *cidr = res.data->data;
-
+    
+    // Cache the CIDR pointer for fast lookups
+    set->cidr_data = cidr;
+    
     // Determine if this is IPv4 or IPv6 based on presence of colon
     bool is_ipv6 = (strchr(cidr_str, ':') != NULL);
-
+    
     int result;
     if (is_ipv6) {
         result = CIDRAddIPv6String(cidr, cidr_str);
     } else {
         result = CIDRAddIPv4String(cidr, cidr_str);
     }
-
+    
     THashDecrUsecnt(res.data);
     THashDataUnlock(res.data);
-
+    
     return result;
 }

@@ -545,6 +545,7 @@ Dataset *DatasetGet(const char *name, enum DatasetTypes type, const char *save, 
                 goto out_err;
             break;
         case DATASET_TYPE_CIDR:
+            SCLogNotice("initializing cidr dataset");
             set->hash = THashInit(cnf_name, sizeof(CIDRType), CIDRSet, CIDRFree, CIDRHash,
                     CIDRCompare, NULL, NULL, load != NULL ? 1 : 0, memcap, hashsize);
             if (set->hash == NULL)
@@ -1150,31 +1151,26 @@ static DataRepResultType DatasetLookupSha256wRep(Dataset *set,
 
 static int DatasetLookupCIDR(Dataset *set, const uint8_t *data, const uint32_t data_len)
 {
-    if (set == NULL)
+    char addr_out[16] = "";
+    PrintInet(AF_INET, data, addr_out, sizeof(addr_out));
+    SCLogNotice("Searching for IPv4 addr %s [len %d]", addr_out, data_len);
+    if (set == NULL || set->cidr_data == NULL)
         return -1;
 
     if (data_len != 4 && data_len != 16)
         return -1;
 
-    // Get the CIDR dataset from the hash
-    // Since CIDR datasets are stored uniquely, we just need to get the first entry
-    CIDRType lookup;
-    memset(&lookup, 0, sizeof(lookup));
-    THashData *rdata = THashLookupFromHash(set->hash, &lookup);
-    if (rdata) {
-        CIDRType *cidr = rdata->data;
-        bool found = false;
+    // Use the cached CIDR pointer to search the radix tree directly
+    CIDRType *cidr = (CIDRType *)set->cidr_data;
+    bool found = false;
 
-        if (data_len == 4) {
-            found = CIDRLookupIPv4(cidr, data);
-        } else if (data_len == 16) {
-            found = CIDRLookupIPv6(cidr, data);
-        }
-
-        DatasetUnlockData(rdata);
-        return found ? 1 : 0;
+    if (data_len == 4) {
+        found = CIDRLookupIPv4(cidr, data);
+    } else if (data_len == 16) {
+        found = CIDRLookupIPv6(cidr, data);
     }
-    return 0;
+
+    return found ? 1 : 0;
 }
 
 static DataRepResultType DatasetLookupCIDRwRep(
@@ -1192,7 +1188,7 @@ static DataRepResultType DatasetLookupCIDRwRep(
         rrep.found = true;
         rrep.rep = 0;
     }
-
+    
     return rrep;
 }
 
@@ -1451,7 +1447,7 @@ static int DatasetAddCIDR(Dataset *set, const uint8_t *data, const uint32_t data
     // Note: For CIDR datasets, 'data' should be a null-terminated string
     // containing the CIDR notation (e.g., "192.168.1.0/24" or "2001:db8::/32")
     // This is different from other dataset types that use binary data.
-
+    
     // This function is not typically used for CIDR datasets directly.
     // CIDR entries are added through the Rust ParseDatasets function.
     SCLogWarning("DatasetAddCIDR: direct addition not supported, use dataset loading");
