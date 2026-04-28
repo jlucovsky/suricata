@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2026 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -111,7 +111,7 @@ static int DetectFtpbounceMatchArgs(
     }
 
     i = offset;
-    /* Search for the first IP octect(Skips "PORT ") */
+    /* Search for the first IP octet */
     while (i < payload_len && !isdigit((unsigned char)c[i])) i++;
 
     for (;i < payload_len && octet_ascii_len < 4 ;i++) {
@@ -172,18 +172,26 @@ static int DetectFtpbounceALMatch(DetectEngineThreadCtx *det_ctx,
 {
     SCEnter();
 
-    FtpState *ftp_state = (FtpState *)state;
-    if (ftp_state == NULL) {
-        SCLogDebug("no ftp state, no match");
+    if (txv == NULL)
         SCReturnInt(0);
-    }
 
-    int ret = 0;
-    if (ftp_state->command == FTP_COMMAND_PORT) {
-        ret = DetectFtpbounceMatchArgs(ftp_state->port_line,
-                  ftp_state->port_line_len, f->src.address.address_un_data32[0],
-                  ftp_state->arg_offset);
-    }
+    /* Check that this transaction is a PORT command. */
+    const uint8_t *cmd_buf = NULL;
+    uint32_t cmd_len = 0;
+    if (!SCFTPGetCommandData(txv, flags, &cmd_buf, &cmd_len))
+        SCReturnInt(0);
+
+    if (cmd_len != 4 || memcmp(cmd_buf, "PORT", 4) != 0)
+        SCReturnInt(0);
+
+    /* Get the PORT arguments (the IP,port data after "PORT "). */
+    const uint8_t *arg_buf = NULL;
+    uint32_t arg_len = 0;
+    if (!SCFTPGetCommandArgData(txv, flags, &arg_buf, &arg_len))
+        SCReturnInt(0);
+
+    int ret = DetectFtpbounceMatchArgs(
+            (uint8_t *)arg_buf, arg_len, f->src.address.address_un_data32[0], 0);
 
     SCReturnInt(ret);
 }

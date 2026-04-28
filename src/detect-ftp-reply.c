@@ -1,4 +1,4 @@
-/* Copyright (C) 2025 Open Information Security Foundation
+/* Copyright (C) 2026 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -63,28 +63,8 @@ static int DetectFtpReplySetup(DetectEngineCtx *de_ctx, Signature *s, const char
 static bool DetectFTPReplyGetData(DetectEngineThreadCtx *_det_ctx, const void *txv,
         uint8_t _flow_flags, uint32_t index, const uint8_t **buffer, uint32_t *buffer_len)
 {
-    FTPTransaction *tx = (FTPTransaction *)txv;
-
-    if (tx->command_descriptor.command_code == FTP_COMMAND_UNKNOWN)
-        return false;
-
-    if (!TAILQ_EMPTY(&tx->response_list)) {
-        uint32_t count = 0;
-        FTPResponseWrapper *wrapper;
-        TAILQ_FOREACH (wrapper, &tx->response_list, next) {
-            DEBUG_VALIDATE_BUG_ON(wrapper->response == NULL);
-            if (index == count) {
-                *buffer = (const uint8_t *)wrapper->response->response;
-                *buffer_len = (uint32_t)wrapper->response->length;
-                return true;
-            }
-            count++;
-        }
-    }
-
-    *buffer = NULL;
-    *buffer_len = 0;
-    return false;
+    bool more = false;
+    return SCFTPGetReplyData(txv, _flow_flags, &index, buffer, buffer_len, &more);
 }
 
 void DetectFtpReplyRegister(void)

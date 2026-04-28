@@ -1,4 +1,4 @@
-/* Copyright (C) 2025 Open Information Security Foundation
+/* Copyright (C) 2026 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -83,18 +83,7 @@ static int DetectFtpDynamicPortMatch(DetectEngineThreadCtx *det_ctx, Flow *f, ui
         void *state, void *txv, const Signature *s, const SigMatchCtx *ctx)
 {
     SCEnter();
-
-    FTPTransaction *tx = (FTPTransaction *)txv;
-    if (tx->command_descriptor.command_code == FTP_COMMAND_UNKNOWN)
-        return 0;
-    if (tx->dyn_port == 0)
-        return 0;
-
-    const DetectU16Data *ftpd = (const DetectU16Data *)ctx;
-
-    SCLogDebug("Checking for match between rule value(s) %u, %u with actual value %d", ftpd->arg1,
-            ftpd->arg2, tx->dyn_port);
-    return DetectU16Match(tx->dyn_port, ftpd);
+    SCReturnInt(SCFTPDetectDynPortMatch(txv, (const DetectUintData_u16 *)ctx));
 }
 
 void DetectFtpDynamicPortRegister(void)
@@ -105,14 +94,14 @@ void DetectFtpDynamicPortRegister(void)
     sigmatch_table[DETECT_FTP_DYNPORT].url = "/rules/" KEYWORD_DOC;
     sigmatch_table[DETECT_FTP_DYNPORT].Setup = DetectFtpDynamicPortSetup;
     sigmatch_table[DETECT_FTP_DYNPORT].Free = DetectFtpDynamicPortFree;
-    sigmatch_table[DETECT_FTP_DYNPORT].flags = SIGMATCH_INFO_UINT16 | SIGMATCH_SUPPORT_FIREWALL;
+    sigmatch_table[DETECT_FTP_DYNPORT].flags = SIGMATCH_INFO_UINT16;
     sigmatch_table[DETECT_FTP_DYNPORT].AppLayerTxMatch = DetectFtpDynamicPortMatch;
 
-    DetectAppLayerInspectEngineRegister(BUFFER_NAME, ALPROTO_FTP, SIG_FLAG_TOCLIENT,
-            FTP_STATE_FINISHED, DetectEngineInspectGenericList, NULL);
+    DetectAppLayerInspectEngineRegister(
+            BUFFER_NAME, ALPROTO_FTP, SIG_FLAG_TOCLIENT, 0, DetectEngineInspectGenericList, NULL);
 
-    DetectAppLayerInspectEngineRegister(BUFFER_NAME, ALPROTO_FTP, SIG_FLAG_TOSERVER,
-            FTP_STATE_FINISHED, DetectEngineInspectGenericList, NULL);
+    DetectAppLayerInspectEngineRegister(
+            BUFFER_NAME, ALPROTO_FTP, SIG_FLAG_TOSERVER, 0, DetectEngineInspectGenericList, NULL);
 
     DetectBufferTypeSetDescriptionByName(BUFFER_NAME, BUFFER_DESC);
 

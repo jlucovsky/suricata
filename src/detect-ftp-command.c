@@ -1,4 +1,4 @@
-/* Copyright (C) 2025 Open Information Security Foundation
+/* Copyright (C) 2026 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -59,19 +59,7 @@ static int DetectFtpCommandSetup(DetectEngineCtx *de_ctx, Signature *s, const ch
 static bool DetectFTPCommandGetData(
         const void *txv, const uint8_t _flow_flags, const uint8_t **buffer, uint32_t *buffer_len)
 {
-    FTPTransaction *tx = (FTPTransaction *)txv;
-
-    if (tx->command_descriptor.command_code == FTP_COMMAND_UNKNOWN)
-        return false;
-
-    uint8_t b_len = 0;
-    if (SCGetFtpCommandInfo(
-                tx->command_descriptor.command_index, (const char **)buffer, NULL, &b_len)) {
-        *buffer_len = b_len;
-        return true;
-    } else {
-        return false;
-    }
+    return SCFTPGetCommandData(txv, _flow_flags, buffer, buffer_len);
 }
 
 void DetectFtpCommandRegister(void)

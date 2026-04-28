@@ -1,4 +1,4 @@
-/* Copyright (C) 2025 Open Information Security Foundation
+/* Copyright (C) 2026 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -59,16 +59,7 @@ static int g_ftp_mode_buffer_id = 0;
 static int DetectFtpModeMatch(DetectEngineThreadCtx *det_ctx, Flow *f, uint8_t flags, void *state,
         void *txv, const Signature *s, const SigMatchCtx *m)
 {
-    FTPTransaction *tx = (FTPTransaction *)txv;
-    if (tx->command_descriptor.command_code == FTP_COMMAND_UNKNOWN) {
-        return 0;
-    }
-    if (!tx->dyn_port) {
-        return 0;
-    }
-
-    const DetectFtpModeData *ftpmoded = (const DetectFtpModeData *)m;
-    return ftpmoded->active == tx->active;
+    return SCFTPDetectModeMatch(txv, (const DetectFtpModeData *)m);
 }
 
 /**

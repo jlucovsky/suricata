@@ -171,8 +171,8 @@ ftp.dynamic_port
 This keyword matches on the dynamic port negotiated during an FTP session with
 the following FTP commands:
 
-* IPv4: ``PORT`` and ``EPRT``
-* IPv6: ``PASV`` and ``EPSV``
+* Active mode: ``PORT`` (IPv4), ``EPRT`` (IPv4/IPv6)
+* Passive mode: ``PASV`` (IPv4), ``EPSV`` (IPv4/IPv6)
 
 Syntax::
 
@@ -192,7 +192,7 @@ Signature Example:
 
   alert ftp any any -> any any (:example-rule-options:`ftp.dynamic_port: 59914;` sid: 1;)
 
-These rules are will also alert on port ``59914``:
+These rules will also alert on port ``59914``:
 
 .. container:: example-rule
 
@@ -215,7 +215,7 @@ Example rules combining ``ftp.dynamic_port`` with ``ftp.command``
 ftp.mode
 --------
 
-This keyword matches on whether the FTP session is dynamic or passive.
+This keyword matches on whether the FTP session is active or passive.
 In `active` mode sessions, the server establishes the data channel.
 In `passive` mode, the client establishes the data channel. Active
 mode sessions are established in part with the ``PORT`` (``EPRT`` for IPv6)

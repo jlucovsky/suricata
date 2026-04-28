@@ -1,4 +1,4 @@
-/* Copyright (C) 2025 Open Information Security Foundation
+/* Copyright (C) 2026 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -38,16 +38,7 @@ static int g_ftp_reply_received_buffer_id = 0;
 static int DetectFtpReplyReceivedMatch(DetectEngineThreadCtx *det_ctx, Flow *f, uint8_t flags,
         void *state, void *txv, const Signature *s, const SigMatchCtx *m)
 {
-    FTPTransaction *tx = (FTPTransaction *)txv;
-    if (tx->command_descriptor.command_code == FTP_COMMAND_UNKNOWN) {
-        return 0;
-    }
-
-    const DetectFtpReplyReceivedData *ftprrd = (const DetectFtpReplyReceivedData *)m;
-    if (ftprrd->received == tx->done)
-        return 1;
-
-    return 0;
+    return SCFTPDetectReplyReceivedMatch(txv, (const DetectFtpReplyReceivedData *)m);
 }
 
 /**
@@ -128,7 +119,7 @@ void DetectFtpReplyReceivedRegister(void)
     sigmatch_table[DETECT_FTP_REPLY_RECEIVED].Free = DetectFtpReplyReceivedFree;
     sigmatch_table[DETECT_FTP_REPLY_RECEIVED].flags = SIGMATCH_SUPPORT_FIREWALL;
 
-    DetectAppLayerInspectEngineRegister("ftp.reply_received", ALPROTO_FTP, SIG_FLAG_TOCLIENT, 0,
-            DetectEngineInspectGenericList, NULL);
+    DetectAppLayerInspectEngineRegister("ftp.reply_received", ALPROTO_FTP, SIG_FLAG_TOCLIENT,
+            FTP_STATE_FINISHED, DetectEngineInspectGenericList, NULL);
     g_ftp_reply_received_buffer_id = DetectBufferTypeGetByName("ftp.reply_received");
 }

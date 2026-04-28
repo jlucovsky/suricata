@@ -1,4 +1,4 @@
-/* Copyright (C) 2025 Open Information Security Foundation
+/* Copyright (C) 2026 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -64,26 +64,7 @@ static int DetectFtpCommandDataSetup(DetectEngineCtx *de_ctx, Signature *s, cons
 static bool DetectFTPCommandDataGetData(
         const void *txv, const uint8_t _flow_flags, const uint8_t **buffer, uint32_t *buffer_len)
 {
-    FTPTransaction *tx = (FTPTransaction *)txv;
-
-    if (tx->command_descriptor.command_code == FTP_COMMAND_UNKNOWN)
-        return false;
-
-    const char *b;
-    uint8_t b_len;
-    if (SCGetFtpCommandInfo(tx->command_descriptor.command_index, &b, NULL, &b_len)) {
-        if ((tx->request_length - b_len - 1) > 0) {
-            // command data starts here: advance past command + 1 space
-            *buffer = tx->request + b_len + 1;
-            *buffer_len = tx->request_length - b_len - 1;
-            SCLogDebug("command data: \"%s\" [bytes %d]", *buffer, *buffer_len);
-            return true;
-        }
-    }
-
-    *buffer = NULL;
-    *buffer_len = 0;
-    return false;
+    return SCFTPGetCommandArgData(txv, _flow_flags, buffer, buffer_len);
 }
 
 void DetectFtpCommandDataRegister(void)

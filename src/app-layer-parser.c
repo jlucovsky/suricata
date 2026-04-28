@@ -320,7 +320,6 @@ int AppLayerParserDeSetup(void)
 
     SCFree(alp_ctx.ctxs);
 
-    FTPParserCleanup();
     SMTPParserCleanup();
 
     SCReturnInt(0);

@@ -1,4 +1,4 @@
-/* Copyright (C) 2025 Open Information Security Foundation
+/* Copyright (C) 2026 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -33,7 +33,7 @@ pub enum FtpDataStateValues {
 // FTP request command values
 #[repr(u8)]
 #[allow(non_camel_case_types)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum FtpRequestCommand {
     FTP_COMMAND_UNKNOWN,
     FTP_COMMAND_ABOR,
