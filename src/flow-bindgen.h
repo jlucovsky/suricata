@@ -1,4 +1,4 @@
-/* Copyright (C) 2025 Open Information Security Foundation
+/* Copyright (C) 2025-2026 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -47,5 +47,8 @@ const uint8_t *SCFlowGetDestinationAddressAsRawPtr(const Flow *flow);
 uint32_t SCFlowGetToServerPacketCount(const Flow *flow);
 uint32_t SCFlowGetToClientPacketCount(const Flow *flow);
 AppProto SCFlowGetAppProtocol(const Flow *f);
+uint16_t SCFlowGetAppProtoTs(const Flow *flow);
+uint16_t SCFlowGetAppProtoTc(const Flow *flow);
+uint64_t SCFlowGetToDstByteCount(const Flow *flow);
 
 #endif /* SURICATA_FLOW_BINDGEN_H */

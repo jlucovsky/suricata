@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2024 Open Information Security Foundation
+/* Copyright (C) 2007-2026 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -1317,6 +1317,30 @@ uint32_t SCFlowGetToClientPacketCount(const Flow *flow)
 uint64_t SCFlowGetFlags(const Flow *flow)
 {
     return flow->flags;
+}
+
+/**
+ * \brief Get the per-direction app-layer protocol seen so far to server.
+ */
+uint16_t SCFlowGetAppProtoTs(const Flow *flow)
+{
+    return flow->alproto_ts;
+}
+
+/**
+ * \brief Get the per-direction app-layer protocol seen so far to client.
+ */
+uint16_t SCFlowGetAppProtoTc(const Flow *flow)
+{
+    return flow->alproto_tc;
+}
+
+/**
+ * \brief Get the total bytes seen to destination (server) on this flow.
+ */
+uint64_t SCFlowGetToDstByteCount(const Flow *flow)
+{
+    return flow->todstbytecnt;
 }
 /************************************Unittests*******************************/
 

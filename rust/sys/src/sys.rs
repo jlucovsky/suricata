@@ -1999,6 +1999,15 @@ extern "C" {
     ) -> SCThreadStorageId;
 }
 extern "C" {
+    pub fn SCFlowGetAppProtoTs(flow: *const Flow) -> u16;
+}
+extern "C" {
+    pub fn SCFlowGetAppProtoTc(flow: *const Flow) -> u16;
+}
+extern "C" {
+    pub fn SCFlowGetToDstByteCount(flow: *const Flow) -> u64;
+}
+extern "C" {
     pub fn SCSRepCatGetByShortname(shortname: *const ::std::os::raw::c_char) -> u8;
 }
 extern "C" {
