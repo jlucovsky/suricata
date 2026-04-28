@@ -304,3 +304,68 @@ Signature Example:
 .. container:: example-rule
 
   alert ftp any any -> any any (:example-rule-options:`ftp.reply_received: no;` sid: 1;)
+
+FTP App-Layer Events
+--------------------
+
+Suricata generates app-layer events for anomalous FTP behavior. These events
+can be matched with the ``app-layer-event`` keyword.
+
+ftp.request_command_too_long
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Generated when an FTP client command line exceeds the configured maximum line
+length (``app-layer.protocols.ftp.max-line-length``; default 4096 bytes). The
+oversized line is truncated; the transaction is still created with the
+truncated content.
+
+Syntax::
+
+  app-layer-event:ftp.request_command_too_long;
+
+Signature Example:
+
+.. container:: example-rule
+
+  alert ftp any any -> any any (msg:"SURICATA FTP request command too long"; \
+  flow:to_server; :example-rule-options:`app-layer-event:ftp.request_command_too_long;` \
+  classtype:protocol-command-decode; sid:2230001; rev:1;)
+
+ftp.response_command_too_long
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Generated when an FTP server response line exceeds the configured maximum line
+length. The oversized line is truncated and ``reply_truncated`` is set for
+the transaction.
+
+Syntax::
+
+  app-layer-event:ftp.response_command_too_long;
+
+Signature Example:
+
+.. container:: example-rule
+
+  alert ftp any any -> any any (msg:"SURICATA FTP response too long"; \
+  flow:to_client; :example-rule-options:`app-layer-event:ftp.response_command_too_long;` \
+  classtype:protocol-command-decode; sid:2230002; rev:1;)
+
+ftp.too_many_transactions
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Generated when the number of FTP transactions on a single connection exceeds
+the configured limit (``app-layer.protocols.ftp.max-tx``; default
+1024). This event fires on the oldest incomplete transaction, which is
+forcibly completed so that the flow can continue.
+
+Syntax::
+
+  app-layer-event:ftp.too_many_transactions;
+
+Signature Example:
+
+.. container:: example-rule
+
+  alert ftp any any -> any any (msg:"SURICATA FTP too many transactions"; \
+  flow:to_server; :example-rule-options:`app-layer-event:ftp.too_many_transactions;` \
+  classtype:protocol-command-decode; sid:2232002; rev:1;)
