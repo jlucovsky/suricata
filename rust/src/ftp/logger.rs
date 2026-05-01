@@ -46,10 +46,8 @@ fn log_ftp(tx: &FtpTransaction, js: &mut JsonBuilder) -> Result<(), JsonError> {
 
     // Completion codes array.  Only non-continuation responses carry a completion
     // code; continuation lines (NNN-) and intermediate multi-line lines are skipped.
-    let mut reply_truncated = false;
     let mut has_codes = false;
-    let mut reply_count = 0usize;
-
+    let mut has_replies = false;
     for resp in &tx.responses {
         if resp.code > 0 && !resp.is_continuation {
             if !has_codes {
@@ -58,26 +56,23 @@ fn log_ftp(tx: &FtpTransaction, js: &mut JsonBuilder) -> Result<(), JsonError> {
             }
             js.append_string_from_bytes(&resp.code_str)?;
         }
-        if resp.message.len() > 0 {
-            reply_count += 1;
-        }
-        if !reply_truncated && tx.reply_truncated {
-            reply_truncated = true;
+        if !resp.message.is_empty() {
+            has_replies = true;
         }
     }
     if has_codes {
-        js.close()?; // close completion_code array
+        js.close()?;
     }
 
     // Reply messages array.
-    if reply_count > 0 {
+    if has_replies {
         js.open_array("reply")?;
         for resp in &tx.responses {
             if !resp.message.is_empty() {
                 js.append_string_from_bytes(&resp.message)?;
             }
         }
-        js.close()?; // close reply array
+        js.close()?;
     }
 
     // Dynamic port.
@@ -107,21 +102,13 @@ fn log_ftp(tx: &FtpTransaction, js: &mut JsonBuilder) -> Result<(), JsonError> {
         js.set_string("reply_received", "no")?;
     }
 
-    // Reply truncated.
-    if reply_truncated {
-        js.set_bool("reply_truncated", true)?;
-    } else {
-        js.set_bool("reply_truncated", false)?;
-    }
+    js.set_bool("reply_truncated", tx.reply_truncated)?;
 
     js.close()?; // close "ftp" object
     Ok(())
 }
 
 /// Entry point called from C `EveFTPLogCommand` replacement.
-///
-/// # Safety
-/// Unsafe due to raw pointer FFI.
 #[no_mangle]
 pub unsafe extern "C" fn SCFTPLogJsonRecord(
     js: *mut JsonBuilder, tx: *const FtpTransaction,
@@ -154,6 +141,7 @@ mod tests {
         tx.request = Some(b"USER testuser".to_vec());
         tx.arg_offset = 5;
         tx.complete = true;
+        tx.reply_received = true;
         tx.responses.push(FtpResponseLine {
             code: 331,
             is_continuation: false,

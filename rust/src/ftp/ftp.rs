@@ -29,7 +29,6 @@ use crate::applayer::{
 };
 use crate::conf::{conf_get, get_memval};
 use crate::core::{ALPROTO_FAILED, ALPROTO_UNKNOWN, IPPROTO_TCP, STREAM_TOCLIENT, STREAM_TOSERVER};
-use crate::direction::Direction;
 use crate::flow::{flow_get_alproto_tc, flow_get_alproto_ts, flow_get_todst_bytecount, Flow};
 use crate::ftp::constant::*;
 use crate::ftp::event::FtpEvent;
@@ -56,6 +55,7 @@ pub struct DetectFtpModeData {
 pub struct DetectFtpReplyReceivedData {
     pub received: bool,
 }
+
 
 #[repr(C)]
 pub struct FtpTransferCmd {
@@ -283,6 +283,7 @@ pub struct FtpTransaction {
     pub active: bool,
     /// All response lines for this command.
     pub responses: Vec<FtpResponseLine>,
+    pub reply_received: bool,
     pub reply_truncated: bool,
     /// Transaction is complete (final non-preliminary reply received).
     pub complete: bool,
@@ -301,14 +302,10 @@ impl FtpTransaction {
             dyn_port: 0,
             active: false,
             responses: Vec::new(),
+            reply_received: false,
             reply_truncated: false,
             complete: false,
-            // Use Default (all zeros) rather than AppLayerTxData::new(),
-            // which pre-sets updated_tc and updated_ts to true.  parse_request
-            // sets updated_ts on tx creation; parse_response sets updated_tc.
-            // Pre-setting both would cause detection to run TC-side engines
-            // on TS-only packets and fire spurious early alerts.
-            tx_data: AppLayerTxData(Default::default()),
+            tx_data: AppLayerTxData::new(),
         }
     }
 }
@@ -320,20 +317,6 @@ impl Transaction for FtpTransaction {
 }
 
 // ─── State ────────────────────────────────────────────────────────────────────
-
-/// AUTH TLS handshake state.  The client sends `AUTH TLS`, the server
-/// replies `234`, and only then does the flow upgrade to TLS.  These
-/// stages don't correspond to any transaction, so they're tracked here.
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
-enum AuthTlsState {
-    /// No AUTH TLS handshake in progress.
-    Idle,
-    /// Client sent `AUTH TLS`; awaiting server response.
-    Requested,
-    /// Server sent `234`; parse_response should trigger TLS upgrade
-    /// once the Flow pointer is available.
-    Confirmed,
-}
 
 pub struct FtpState {
     pub state_data: AppLayerStateData,
@@ -351,9 +334,12 @@ pub struct FtpState {
     /// Expectations queued during parse_request; created in SCFTPParseRequest
     /// where the Flow pointer is available.
     pending_expectations: Vec<PendingExpectation>,
-    /// AUTH TLS handshake state.  AUTH TLS does not create a transaction, so
-    /// the multi-step upgrade must be tracked at state level.
-    auth_tls: AuthTlsState,
+    /// Set when the server confirms AUTH TLS (234); acted on in SCFTPParseResponse.
+    pending_tls_upgrade: bool,
+    /// Set when AUTH TLS is seen in parse_request; cleared when 234 is received
+    /// in parse_response.  AUTH TLS does not create a transaction, so the upgrade
+    /// must be tracked here instead of via the transaction's command field.
+    pending_auth_tls: bool,
     /// Set while accumulating a multi-line response (code seen with '-' separator).
     /// Cleared when the matching final line (same code, ' ' separator) arrives.
     response_multiline_code: Option<u16>,
@@ -392,7 +378,8 @@ impl FtpState {
             curr_dyn_port: 0,
             curr_active: false,
             pending_expectations: Vec::new(),
-            auth_tls: AuthTlsState::Idle,
+            pending_tls_upgrade: false,
+            pending_auth_tls: false,
             response_multiline_code: None,
         }
     }
@@ -417,27 +404,24 @@ impl FtpState {
         }
     }
 
-    /// Create a new transaction.  When at the max-tx limit, mark the oldest
-    /// incomplete transaction done + tag it with the too_many_transactions
-    /// event, and return None: refusing to grow the transaction list under
-    /// pressure avoids quadratic behaviour on bursty inputs.  Once the
-    /// upper layer frees completed transactions, len() drops and creation
-    /// resumes.
-    fn new_tx(&mut self) -> Option<u64> {
+    /// Create a new transaction, reaping the oldest incomplete one if at the limit.
+    fn new_tx(&mut self) -> u64 {
         if self.transactions.len() >= self.config.max_tx as usize {
+            // Mirror SMB behavior: mark the oldest incomplete tx done and tag it
+            // with the event, then fall through and create the new tx so the flow
+            // continues.  One stale tx is reaped per overflow, keeping memory bounded.
             if let Some(tx) = self.transactions.iter_mut().find(|tx| !tx.complete) {
                 tx.complete = true;
                 tx.tx_data.0.updated_ts = true;
                 tx.tx_data.0.updated_tc = true;
                 tx.tx_data.set_event(FtpEvent::FtpEventTooManyTransactions as u8);
             }
-            return None;
         }
 
         self.tx_cnt += 1;
         let tx_id = self.tx_cnt;
         self.transactions.push_back(FtpTransaction::new(tx_id));
-        Some(tx_id)
+        tx_id
     }
 
     /// Return the oldest incomplete (not-yet-done) transaction, or the oldest
@@ -505,7 +489,7 @@ impl FtpState {
                     // AUTH TLS does not create a transaction: track the upgrade
                     // signal at state level so parse_response can detect 234.
                     if matches!(command, FtpRequestCommand::FTP_COMMAND_AUTH_TLS) {
-                        self.auth_tls = AuthTlsState::Requested;
+                        self.pending_auth_tls = true;
                         continue;
                     }
                     // Unknown commands don't produce events; skip transaction creation
@@ -515,12 +499,7 @@ impl FtpState {
                     }
 
                     // Create transaction; accessed via back_mut() below.
-                    // Skip the request line if we're at the tx cap: the
-                    // too_many_transactions event has already been attached
-                    // to the reaped oldest tx.
-                    if self.new_tx().is_none() {
-                        continue;
-                    }
+                    self.new_tx();
 
                     {
                         let tx = self.transactions.back_mut().unwrap();
@@ -564,81 +543,34 @@ impl FtpState {
                         }
                     }
 
-                    // STOR/RETR need a file name; NLST does not.  All three
-                    // need a negotiated dynamic port.  Emit file_before_port
-                    // / file_without_name events on the tx instead of erroring,
-                    // matching the C behaviour.
-                    let requires_file = matches!(
-                        command,
-                        FtpRequestCommand::FTP_COMMAND_STOR
-                            | FtpRequestCommand::FTP_COMMAND_APPE
-                            | FtpRequestCommand::FTP_COMMAND_RETR
-                    );
-                    // STOU may or may not carry a filename; NLST/LIST/MLSD
-                    // never do.
-                    let is_data_cmd = requires_file
-                        || matches!(
-                            command,
-                            FtpRequestCommand::FTP_COMMAND_NLST
-                                | FtpRequestCommand::FTP_COMMAND_LIST
-                                | FtpRequestCommand::FTP_COMMAND_MLSD
-                                | FtpRequestCommand::FTP_COMMAND_STOU
-                        );
-                    if is_data_cmd {
-                        if self.curr_dyn_port == 0 {
-                            let tx = self.transactions.back_mut().unwrap();
-                            tx.tx_data.set_event(FtpEvent::FtpEventFileBeforePort as u8);
-                        } else if requires_file && arg_offset >= line.len() {
-                            let tx = self.transactions.back_mut().unwrap();
-                            tx.tx_data
-                                .set_event(FtpEvent::FtpEventFileWithoutName as u8);
-                        } else {
-                            // Mirror the direction logic from the C FTPParseRequest:
-                            // active+STOR or passive+(RETR|NLST) => TOCLIENT; else TOSERVER.
-                            // Server-to-client for STOR in active mode, and
-                            // for any of RETR/NLST/LIST/MLSD in passive mode.
-                            let server_to_client = matches!(
-                                command,
-                                FtpRequestCommand::FTP_COMMAND_RETR
-                                    | FtpRequestCommand::FTP_COMMAND_NLST
-                                    | FtpRequestCommand::FTP_COMMAND_LIST
-                                    | FtpRequestCommand::FTP_COMMAND_MLSD
-                            );
-                            // STOR/APPE/STOU in active mode: server initiates
-                            // the data connection, so the upload flows
-                            // TOCLIENT from the FTP-DATA flow's perspective.
-                            let active_upload = matches!(
-                                command,
-                                FtpRequestCommand::FTP_COMMAND_STOR
-                                    | FtpRequestCommand::FTP_COMMAND_APPE
-                                    | FtpRequestCommand::FTP_COMMAND_STOU
-                            );
-                            let direction = if (self.curr_active && active_upload)
-                                || (!self.curr_active && server_to_client)
+                    // STOR/RETR: queue an FTP-DATA expectation when we have a
+                    // confirmed dynamic port and a non-empty file name argument.
+                    if (command == FtpRequestCommand::FTP_COMMAND_STOR
+                        || command == FtpRequestCommand::FTP_COMMAND_RETR)
+                        && self.curr_dyn_port != 0
+                        && arg_offset < line.len()
+                    {
+                        // Mirror the direction logic from the C FTPParseRequest:
+                        // active+STOR or passive+RETR => TOCLIENT; else TOSERVER.
+                        let direction =
+                            if (self.curr_active
+                                && command == FtpRequestCommand::FTP_COMMAND_STOR)
+                                || (!self.curr_active
+                                    && command == FtpRequestCommand::FTP_COMMAND_RETR)
                             {
                                 STREAM_TOCLIENT
                             } else {
                                 STREAM_TOSERVER
                             };
-                            let file_name = if arg_offset < line.len() {
-                                line[arg_offset..].to_vec()
-                            } else if command == FtpRequestCommand::FTP_COMMAND_STOU {
-                                // STOU without a client-provided filename:
-                                // the server picks one, but we need a
-                                // placeholder for file storage / detection.
-                                b"<stou>".to_vec()
-                            } else {
-                                Vec::new()
-                            };
-                            self.pending_expectations.push(PendingExpectation {
-                                file_name,
-                                cmd: command as u8,
-                                direction,
-                                dyn_port: self.curr_dyn_port,
-                            });
-                            self.curr_dyn_port = 0;
-                            self.curr_active = false;
-                        }
+                        let file_name = line[arg_offset..].to_vec();
+                        self.pending_expectations.push(PendingExpectation {
+                            file_name,
+                            cmd: command as u8,
+                            direction,
+                            dyn_port: self.curr_dyn_port,
+                        });
+                        self.curr_dyn_port = 0;
+                        self.curr_active = false;
                     }
                 }
             }
@@ -717,23 +649,19 @@ impl FtpState {
                             }
                         };
 
-                    // AUTH TLS 234 upgrade: detected via state field because
-                    // AUTH TLS does not create a transaction.
-                    if code == 234 && self.auth_tls == AuthTlsState::Requested {
-                        self.auth_tls = AuthTlsState::Confirmed;
+                    // AUTH TLS 234 upgrade: detected via state flag because AUTH TLS
+                    // does not create a transaction.
+                    if code == 234 && self.pending_auth_tls {
+                        self.pending_tls_upgrade = true;
+                        self.pending_auth_tls = false;
                     }
 
                     // None only when deque is empty (banner before any command).
-                    // If new_tx also fails (at max-tx), drop the response line;
-                    // there is no tx to attach it to.
-                    let (tx_id, tx_is_response_only) =
-                        if let Some(tx) = self.get_oldest_tx_mut() {
-                            (tx.tx_id, false)
-                        } else if let Some(id) = self.new_tx() {
-                            (id, true)
-                        } else {
-                            continue;
-                        };
+                    let tx_id = if let Some(tx) = self.get_oldest_tx_mut() {
+                        tx.tx_id
+                    } else {
+                        self.new_tx()
+                    };
 
                     // Locals to carry state updates past the tx borrow.
                     let mut new_active_port: u16 = 0;
@@ -746,20 +674,12 @@ impl FtpState {
                         .find(|tx| tx.tx_id == tx_id)
                         .unwrap();
 
-                    if tx_is_response_only {
-                        // No corresponding request (e.g. the initial banner):
-                        // this is a TC-only tx.  for_direction(ToClient) sets
-                        // updated_tc=true and SKIP_INSPECT_TS in one go, so
-                        // firewall-mode rules aren't stuck waiting for a
-                        // request that will never come.
-                        tx.tx_data = AppLayerTxData::for_direction(Direction::ToClient);
+                    tx.tx_data.0.updated_tc = true;
+                    // A truncated reply is unusable; treat as "not received" for
+                    // the ftp.reply_received keyword so detection rules fire correctly.
+                    if !truncated {
+                        tx.reply_received = true;
                     } else {
-                        tx.tx_data.0.updated_tc = true;
-                    }
-                    // reply_received is derived from tx.complete at match /
-                    // log time (matching upstream tx->done semantics);
-                    // truncated is a separate independent signal.
-                    if truncated {
                         tx.reply_truncated = true;
                         tx.tx_data
                             .set_event(FtpEvent::FtpEventResponseCommandTooLong as u8);
@@ -891,14 +811,6 @@ pub unsafe extern "C" fn SCFTPParseRequest(
         );
     }
 
-    // Match upstream: trigger raw-stream inspection after processing
-    // request-side data.  Without this, detection scheduling for the
-    // opposite direction can be off (visible as spurious early alerts on
-    // TC-direction engines).
-    suricata_sys::sys::SCAppLayerParserTriggerRawStreamInspection(
-        flow, STREAM_TOSERVER as c_int,
-    );
-
     result
 }
 
@@ -929,17 +841,10 @@ pub unsafe extern "C" fn SCFTPParseResponse(
 
     // If the server confirmed AUTH TLS (234), request a TLS upgrade now that
     // we have the Flow pointer.
-    if state.auth_tls == AuthTlsState::Confirmed {
-        state.auth_tls = AuthTlsState::Idle;
+    if state.pending_tls_upgrade {
+        state.pending_tls_upgrade = false;
         SCAppLayerRequestProtocolTLSUpgrade(flow);
     }
-
-    // Match upstream: trigger raw-stream inspection after processing
-    // response-side data (upstream calls this each time a tx transitions
-    // to done).
-    suricata_sys::sys::SCAppLayerParserTriggerRawStreamInspection(
-        flow, STREAM_TOCLIENT as c_int,
-    );
 
     result
 }
@@ -1267,14 +1172,13 @@ mod tests {
     fn test_tx_count_limit() {
         let mut state = make_state();
         state.config.max_tx = 2;
-        // Slots fill with USER and PASS.  On the third command we hit the
-        // limit: the oldest incomplete tx is reaped and tagged with the
-        // event, and NO new tx is created (matches upstream tx-cap fix
-        // 82c4190558 -- avoids quadratic growth on bursts).
+        // Slots fill with USER and PASS. On the third command the oldest incomplete
+        // tx is reaped and tagged with the event, then the new tx is created — the
+        // flow continues rather than halting.
         assert!(state.parse_request(b"USER a\r\n").is_ok());
         assert!(state.parse_request(b"PASS b\r\n").is_ok());
         assert!(state.parse_request(b"NOOP\r\n").is_ok());
-        assert_eq!(state.tx_cnt, 2);
+        assert_eq!(state.tx_cnt, 3);
         // The first tx (USER) should have been reaped and carry the event.
         let tx = state.get_transaction(0).unwrap();
         assert!(tx.complete);
@@ -1366,11 +1270,11 @@ mod tests {
 
     #[test]
     fn test_parse_request_auth_tls() {
-        // AUTH TLS does not create a transaction; it sets auth_tls to Requested.
+        // AUTH TLS does not create a transaction; it sets pending_auth_tls.
         let mut state = make_state();
         assert!(state.parse_request(b"AUTH TLS\r\n").is_ok());
         assert!(state.transactions.is_empty());
-        assert_eq!(state.auth_tls, AuthTlsState::Requested);
+        assert!(state.pending_auth_tls);
     }
 
     #[test]

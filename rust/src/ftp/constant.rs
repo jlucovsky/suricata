@@ -86,3 +86,72 @@ pub enum FtpRequestCommand {
     FTP_COMMAND_EPRT,
     FTP_COMMAND_MLSD,
 }
+
+// Longest FTP command name that can appear as a bare token (AUTH TLS is
+// resolved specially in the parser and is never passed to from_name).
+const MAX_CMD_NAME_LEN: usize = 8;
+
+impl FtpRequestCommand {
+    /// Map a raw command name (case-insensitive) to its enum variant.
+    pub fn from_name(name: &[u8]) -> Self {
+        if name.len() > MAX_CMD_NAME_LEN {
+            return Self::FTP_COMMAND_UNKNOWN;
+        }
+        let mut buf = [0u8; MAX_CMD_NAME_LEN];
+        for (i, &b) in name.iter().enumerate() {
+            buf[i] = b.to_ascii_uppercase();
+        }
+        match &buf[..name.len()] {
+            b"ABOR" => Self::FTP_COMMAND_ABOR,
+            b"ACCT" => Self::FTP_COMMAND_ACCT,
+            b"ALLO" => Self::FTP_COMMAND_ALLO,
+            b"APPE" => Self::FTP_COMMAND_APPE,
+            // FTP_COMMAND_AUTH_TLS is resolved in parse_request_line by
+            // inspecting both the command name ("AUTH") and argument ("TLS").
+            b"CDUP" => Self::FTP_COMMAND_CDUP,
+            b"CHMOD" => Self::FTP_COMMAND_CHMOD,
+            b"CWD" => Self::FTP_COMMAND_CWD,
+            b"DELE" => Self::FTP_COMMAND_DELE,
+            b"EPRT" => Self::FTP_COMMAND_EPRT,
+            b"EPSV" => Self::FTP_COMMAND_EPSV,
+            b"HELP" => Self::FTP_COMMAND_HELP,
+            b"IDLE" => Self::FTP_COMMAND_IDLE,
+            b"LIST" => Self::FTP_COMMAND_LIST,
+            b"MAIL" => Self::FTP_COMMAND_MAIL,
+            b"MDTM" => Self::FTP_COMMAND_MDTM,
+            b"MKD" => Self::FTP_COMMAND_MKD,
+            b"MLFL" => Self::FTP_COMMAND_MLFL,
+            b"MODE" => Self::FTP_COMMAND_MODE,
+            b"MRCP" => Self::FTP_COMMAND_MRCP,
+            b"MRSQ" => Self::FTP_COMMAND_MRSQ,
+            b"MSAM" => Self::FTP_COMMAND_MSAM,
+            b"MSND" => Self::FTP_COMMAND_MSND,
+            b"MSOM" => Self::FTP_COMMAND_MSOM,
+            b"NLST" => Self::FTP_COMMAND_NLST,
+            b"NOOP" => Self::FTP_COMMAND_NOOP,
+            b"PASS" => Self::FTP_COMMAND_PASS,
+            b"PASV" => Self::FTP_COMMAND_PASV,
+            b"PORT" => Self::FTP_COMMAND_PORT,
+            b"PWD" => Self::FTP_COMMAND_PWD,
+            b"QUIT" => Self::FTP_COMMAND_QUIT,
+            b"REIN" => Self::FTP_COMMAND_REIN,
+            b"REST" => Self::FTP_COMMAND_REST,
+            b"RETR" => Self::FTP_COMMAND_RETR,
+            b"RMD" => Self::FTP_COMMAND_RMD,
+            b"RNFR" => Self::FTP_COMMAND_RNFR,
+            b"RNTO" => Self::FTP_COMMAND_RNTO,
+            b"SITE" => Self::FTP_COMMAND_SITE,
+            b"SIZE" => Self::FTP_COMMAND_SIZE,
+            b"SMNT" => Self::FTP_COMMAND_SMNT,
+            b"STAT" => Self::FTP_COMMAND_STAT,
+            b"STOR" => Self::FTP_COMMAND_STOR,
+            b"STOU" => Self::FTP_COMMAND_STOU,
+            b"STRU" => Self::FTP_COMMAND_STRU,
+            b"SYST" => Self::FTP_COMMAND_SYST,
+            b"TYPE" => Self::FTP_COMMAND_TYPE,
+            b"UMASK" => Self::FTP_COMMAND_UMASK,
+            b"USER" => Self::FTP_COMMAND_USER,
+            _ => Self::FTP_COMMAND_UNKNOWN,
+        }
+    }
+}

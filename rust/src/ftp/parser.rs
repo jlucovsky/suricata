@@ -53,66 +53,7 @@ pub struct FtpResponseLine {
 /// Parse an ASCII alphabetic command token (up to the end-of-line or first
 /// space/tab).
 fn ftp_command_token(input: &[u8]) -> IResult<&[u8], &[u8]> {
-    take_while1(|c: u8| c.is_ascii_alphabetic() || c == b'_')(input)
-}
-
-/// Map an ASCII command token (case-insensitive) to a `FtpRequestCommand`.
-/// Returns `FtpRequestCommand::FTP_COMMAND_UNKNOWN` for unrecognised commands.
-fn map_command(name: &[u8]) -> FtpRequestCommand {
-    // Upper-case the name for comparison (FTP commands are case-insensitive by
-    // the RFC, though clients almost always send upper-case).
-    let upper: Vec<u8> = name.iter().map(|b| b.to_ascii_uppercase()).collect();
-    match upper.as_slice() {
-        b"ABOR" => FtpRequestCommand::FTP_COMMAND_ABOR,
-        b"ACCT" => FtpRequestCommand::FTP_COMMAND_ACCT,
-        b"ALLO" => FtpRequestCommand::FTP_COMMAND_ALLO,
-        b"APPE" => FtpRequestCommand::FTP_COMMAND_APPE,
-        b"AUTH_TLS" => FtpRequestCommand::FTP_COMMAND_AUTH_TLS,
-        b"CDUP" => FtpRequestCommand::FTP_COMMAND_CDUP,
-        b"CHMOD" => FtpRequestCommand::FTP_COMMAND_CHMOD,
-        b"CWD" => FtpRequestCommand::FTP_COMMAND_CWD,
-        b"DELE" => FtpRequestCommand::FTP_COMMAND_DELE,
-        b"EPRT" => FtpRequestCommand::FTP_COMMAND_EPRT,
-        b"EPSV" => FtpRequestCommand::FTP_COMMAND_EPSV,
-        b"HELP" => FtpRequestCommand::FTP_COMMAND_HELP,
-        b"IDLE" => FtpRequestCommand::FTP_COMMAND_IDLE,
-        b"LIST" => FtpRequestCommand::FTP_COMMAND_LIST,
-        b"MAIL" => FtpRequestCommand::FTP_COMMAND_MAIL,
-        b"MDTM" => FtpRequestCommand::FTP_COMMAND_MDTM,
-        b"MKD" => FtpRequestCommand::FTP_COMMAND_MKD,
-        b"MLFL" => FtpRequestCommand::FTP_COMMAND_MLFL,
-        b"MODE" => FtpRequestCommand::FTP_COMMAND_MODE,
-        b"MRCP" => FtpRequestCommand::FTP_COMMAND_MRCP,
-        b"MRSQ" => FtpRequestCommand::FTP_COMMAND_MRSQ,
-        b"MSAM" => FtpRequestCommand::FTP_COMMAND_MSAM,
-        b"MSND" => FtpRequestCommand::FTP_COMMAND_MSND,
-        b"MSOM" => FtpRequestCommand::FTP_COMMAND_MSOM,
-        b"NLST" => FtpRequestCommand::FTP_COMMAND_NLST,
-        b"NOOP" => FtpRequestCommand::FTP_COMMAND_NOOP,
-        b"PASS" => FtpRequestCommand::FTP_COMMAND_PASS,
-        b"PASV" => FtpRequestCommand::FTP_COMMAND_PASV,
-        b"PORT" => FtpRequestCommand::FTP_COMMAND_PORT,
-        b"PWD" => FtpRequestCommand::FTP_COMMAND_PWD,
-        b"QUIT" => FtpRequestCommand::FTP_COMMAND_QUIT,
-        b"REIN" => FtpRequestCommand::FTP_COMMAND_REIN,
-        b"REST" => FtpRequestCommand::FTP_COMMAND_REST,
-        b"RETR" => FtpRequestCommand::FTP_COMMAND_RETR,
-        b"RMD" => FtpRequestCommand::FTP_COMMAND_RMD,
-        b"RNFR" => FtpRequestCommand::FTP_COMMAND_RNFR,
-        b"RNTO" => FtpRequestCommand::FTP_COMMAND_RNTO,
-        b"SITE" => FtpRequestCommand::FTP_COMMAND_SITE,
-        b"SIZE" => FtpRequestCommand::FTP_COMMAND_SIZE,
-        b"SMNT" => FtpRequestCommand::FTP_COMMAND_SMNT,
-        b"STAT" => FtpRequestCommand::FTP_COMMAND_STAT,
-        b"STOR" => FtpRequestCommand::FTP_COMMAND_STOR,
-        b"STOU" => FtpRequestCommand::FTP_COMMAND_STOU,
-        b"STRU" => FtpRequestCommand::FTP_COMMAND_STRU,
-        b"SYST" => FtpRequestCommand::FTP_COMMAND_SYST,
-        b"TYPE" => FtpRequestCommand::FTP_COMMAND_TYPE,
-        b"UMASK" => FtpRequestCommand::FTP_COMMAND_UMASK,
-        b"USER" => FtpRequestCommand::FTP_COMMAND_USER,
-        _ => FtpRequestCommand::FTP_COMMAND_UNKNOWN,
-    }
+    take_while1(|c: u8| c.is_ascii_alphabetic())(input)
 }
 
 // ─── Public parsers ───────────────────────────────────────────────────────────
@@ -124,7 +65,6 @@ fn map_command(name: &[u8]) -> FtpRequestCommand {
 /// terminator.
 pub fn parse_request_line(input: &[u8]) -> IResult<&[u8], FtpRequestLine<'_>> {
     let (rem, name) = ftp_command_token(input)?;
-    let command = map_command(name);
 
     // Optional: one or more spaces followed by the argument.
     let arg = if !rem.is_empty() && (rem[0] == b' ' || rem[0] == b'\t') {
@@ -136,6 +76,17 @@ pub fn parse_request_line(input: &[u8]) -> IResult<&[u8], FtpRequestLine<'_>> {
         }
     } else {
         None
+    };
+
+    // AUTH TLS is a two-token command on the wire ("AUTH TLS").  Detect it by
+    // checking the name and argument rather than expecting "AUTH_TLS" as a
+    // single token.
+    let command = if name.eq_ignore_ascii_case(b"AUTH")
+        && matches!(arg, Some(a) if a.eq_ignore_ascii_case(b"TLS"))
+    {
+        FtpRequestCommand::FTP_COMMAND_AUTH_TLS
+    } else {
+        FtpRequestCommand::from_name(name)
     };
 
     Ok((
@@ -205,16 +156,12 @@ pub fn is_preliminary_response(code: u16) -> bool {
 
 // ─── Port parsers (migrated from mod.rs) ──────────────────────────────────────
 
-fn getu16(i: &[u8]) -> IResult<&[u8], u16> {
-    map_res(
-        map_res(delimited(multispace0, digit1, multispace0), str::from_utf8),
-        FromStr::from_str,
-    )
-    .parse(i)
-}
-
 fn parse_u16(i: &[u8]) -> IResult<&[u8], u16> {
     map_res(map_res(digit1, str::from_utf8), u16::from_str).parse(i)
+}
+
+fn getu16(i: &[u8]) -> IResult<&[u8], u16> {
+    delimited(multispace0, parse_u16, multispace0).parse(i)
 }
 
 /// PORT 192,168,0,13,234,10  →  port number
@@ -341,8 +288,9 @@ pub fn extract_line(buf: &[u8], max_len: usize) -> Option<(Vec<u8>, usize, bool)
             pos
         };
         let line = &buf[..end];
-        if line.len() > max_len {
-            // Truncate.
+        if line.len() >= max_len {
+            // Truncate: >= because the buffer is capped at max_len before '\n' arrives,
+            // so a line of exactly max_len bytes was originally longer.
             Some((line[..max_len].to_vec(), consumed, true))
         } else {
             Some((line.to_vec(), consumed, false))
@@ -486,5 +434,25 @@ mod tests {
             b"EPRT |2|2a01:e34:ee97:b130:8c3e:45ea:5ac6:e301|41813|",
         );
         assert_eq!(port, Ok((&b""[..], 41813)));
+    }
+
+    #[test]
+    fn test_parse_request_auth_tls() {
+        let (_, req) = parse_request_line(b"AUTH TLS").unwrap();
+        assert!(matches!(req.command, FtpRequestCommand::FTP_COMMAND_AUTH_TLS));
+        assert_eq!(req.command_name, b"AUTH");
+        assert_eq!(req.arg, Some(b"TLS".as_ref()));
+    }
+
+    #[test]
+    fn test_parse_request_auth_tls_lowercase() {
+        let (_, req) = parse_request_line(b"auth tls").unwrap();
+        assert!(matches!(req.command, FtpRequestCommand::FTP_COMMAND_AUTH_TLS));
+    }
+
+    #[test]
+    fn test_parse_request_auth_other_is_unknown() {
+        let (_, req) = parse_request_line(b"AUTH GSSAPI").unwrap();
+        assert!(matches!(req.command, FtpRequestCommand::FTP_COMMAND_UNKNOWN));
     }
 }
