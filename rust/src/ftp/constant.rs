@@ -156,3 +156,56 @@ impl FtpRequestCommand {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_from_name_known() {
+        assert!(matches!(
+            FtpRequestCommand::from_name(b"USER"),
+            FtpRequestCommand::FTP_COMMAND_USER
+        ));
+        assert!(matches!(
+            FtpRequestCommand::from_name(b"PASV"),
+            FtpRequestCommand::FTP_COMMAND_PASV
+        ));
+        assert!(matches!(
+            FtpRequestCommand::from_name(b"EPRT"),
+            FtpRequestCommand::FTP_COMMAND_EPRT
+        ));
+        assert!(matches!(
+            FtpRequestCommand::from_name(b"STOR"),
+            FtpRequestCommand::FTP_COMMAND_STOR
+        ));
+    }
+
+    #[test]
+    fn test_from_name_case_insensitive() {
+        assert!(matches!(
+            FtpRequestCommand::from_name(b"user"),
+            FtpRequestCommand::FTP_COMMAND_USER
+        ));
+        assert!(matches!(
+            FtpRequestCommand::from_name(b"User"),
+            FtpRequestCommand::FTP_COMMAND_USER
+        ));
+    }
+
+    #[test]
+    fn test_from_name_unknown() {
+        assert!(matches!(
+            FtpRequestCommand::from_name(b"XYZZY"),
+            FtpRequestCommand::FTP_COMMAND_UNKNOWN
+        ));
+    }
+
+    #[test]
+    fn test_from_name_too_long() {
+        assert!(matches!(
+            FtpRequestCommand::from_name(b"TOOLONGCMD"),
+            FtpRequestCommand::FTP_COMMAND_UNKNOWN
+        ));
+    }
+}

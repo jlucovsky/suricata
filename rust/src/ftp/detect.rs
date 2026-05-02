@@ -23,19 +23,17 @@
 use crate::detect::uint::{detect_match_uint, DetectUintData};
 use crate::ftp::constant::FtpRequestCommand;
 use crate::ftp::ftp::{DetectFtpModeData, DetectFtpReplyReceivedData, FtpTransaction};
+use std::os::raw::c_void;
 
 // ─── ftp.command sticky buffer ───────────────────────────────────────────────
 
 /// Fill `buf`/`len` with the command name from the transaction.
 /// Returns false for UNKNOWN commands or missing request.
-///
-/// # Safety
-/// Unsafe due to raw pointer FFI.
 #[no_mangle]
 pub unsafe extern "C" fn SCFTPGetCommandData(
-    tx: *const FtpTransaction, _flags: u8, buf: *mut *const u8, len: *mut u32,
+    tx: *const c_void, _flags: u8, buf: *mut *const u8, len: *mut u32,
 ) -> bool {
-    let tx = &*tx;
+    let tx = cast_pointer!(tx, FtpTransaction);
     if matches!(tx.command, FtpRequestCommand::FTP_COMMAND_UNKNOWN) {
         return false;
     }
@@ -50,14 +48,11 @@ pub unsafe extern "C" fn SCFTPGetCommandData(
 // ─── ftp.command_data sticky buffer ──────────────────────────────────────────
 
 /// Fill `buf`/`len` with the argument portion of the command line.
-///
-/// # Safety
-/// Unsafe due to raw pointer FFI.
 #[no_mangle]
 pub unsafe extern "C" fn SCFTPGetCommandArgData(
-    tx: *const FtpTransaction, _flags: u8, buf: *mut *const u8, len: *mut u32,
+    tx: *const c_void, _flags: u8, buf: *mut *const u8, len: *mut u32,
 ) -> bool {
-    let tx = &*tx;
+    let tx = cast_pointer!(tx, FtpTransaction);
     if matches!(tx.command, FtpRequestCommand::FTP_COMMAND_UNKNOWN) {
         *buf = std::ptr::null();
         *len = 0;
@@ -79,15 +74,12 @@ pub unsafe extern "C" fn SCFTPGetCommandArgData(
 
 /// Fill `buf`/`len` with the Nth response message (`local_id`).
 /// Sets `*more` to true if there are more response lines after this one.
-///
-/// # Safety
-/// Unsafe due to raw pointer FFI.
 #[no_mangle]
 pub unsafe extern "C" fn SCFTPGetReplyData(
-    tx: *const FtpTransaction, _flags: u8, local_id: *mut u32, buf: *mut *const u8,
+    tx: *const c_void, _flags: u8, local_id: *mut u32, buf: *mut *const u8,
     len: *mut u32, more: *mut bool,
 ) -> bool {
-    let tx = &*tx;
+    let tx = cast_pointer!(tx, FtpTransaction);
     let idx = *local_id as usize;
     if idx >= tx.responses.len() {
         *buf = std::ptr::null();
@@ -109,10 +101,10 @@ pub unsafe extern "C" fn SCFTPGetReplyData(
 /// Skips continuation lines and code-0 entries, matching the logger.
 #[no_mangle]
 pub unsafe extern "C" fn SCFTPGetCompletionCodeData(
-    tx: *const FtpTransaction, _flags: u8, local_id: *mut u32, buf: *mut *const u8,
+    tx: *const c_void, _flags: u8, local_id: *mut u32, buf: *mut *const u8,
     len: *mut u32,
 ) -> bool {
-    let tx = &*tx;
+    let tx = cast_pointer!(tx, FtpTransaction);
     loop {
         let idx = *local_id as usize;
         if idx >= tx.responses.len() {
@@ -134,14 +126,11 @@ pub unsafe extern "C" fn SCFTPGetCompletionCodeData(
 // ─── ftp.mode match ──────────────────────────────────────────────────────────
 
 /// Match active/passive mode.
-///
-/// # Safety
-/// Unsafe due to raw pointer FFI.
 #[no_mangle]
 pub unsafe extern "C" fn SCFTPDetectModeMatch(
-    tx: *const FtpTransaction, mode_data: *const DetectFtpModeData,
+    tx: *const c_void, mode_data: *const DetectFtpModeData,
 ) -> bool {
-    let tx = &*tx;
+    let tx = cast_pointer!(tx, FtpTransaction);
     if matches!(tx.command, FtpRequestCommand::FTP_COMMAND_UNKNOWN) {
         return false;
     }
@@ -155,14 +144,11 @@ pub unsafe extern "C" fn SCFTPDetectModeMatch(
 // ─── ftp.reply_received match ─────────────────────────────────────────────────
 
 /// Match whether a reply was received.
-///
-/// # Safety
-/// Unsafe due to raw pointer FFI.
 #[no_mangle]
 pub unsafe extern "C" fn SCFTPDetectReplyReceivedMatch(
-    tx: *const FtpTransaction, data: *const DetectFtpReplyReceivedData,
+    tx: *const c_void, data: *const DetectFtpReplyReceivedData,
 ) -> bool {
-    let tx = &*tx;
+    let tx = cast_pointer!(tx, FtpTransaction);
     if matches!(tx.command, FtpRequestCommand::FTP_COMMAND_UNKNOWN) {
         return false;
     }
@@ -178,14 +164,11 @@ pub unsafe extern "C" fn SCFTPDetectReplyReceivedMatch(
 /// (equal, not-equal, range, bitmask, etc.).
 ///
 /// Returns false when no dynamic port is set (dyn_port == 0).
-///
-/// # Safety
-/// Unsafe due to raw pointer FFI.
 #[no_mangle]
 pub unsafe extern "C" fn SCFTPDetectDynPortMatch(
-    tx: *const FtpTransaction, data: *const DetectUintData<u16>,
+    tx: *const c_void, data: *const DetectUintData<u16>,
 ) -> bool {
-    let tx = &*tx;
+    let tx = cast_pointer!(tx, FtpTransaction);
     if matches!(tx.command, FtpRequestCommand::FTP_COMMAND_UNKNOWN) {
         return false;
     }
@@ -226,7 +209,7 @@ mod tests {
         let tx = make_user_tx();
         let mut buf: *const u8 = std::ptr::null();
         let mut len: u32 = 0;
-        let result = unsafe { SCFTPGetCommandData(&tx, 0, &mut buf, &mut len) };
+        let result = unsafe { SCFTPGetCommandData(&tx as *const FtpTransaction as *const c_void, 0, &mut buf, &mut len) };
         assert!(result);
         assert_eq!(len, 4);
         let slice = unsafe { std::slice::from_raw_parts(buf, len as usize) };
@@ -238,7 +221,7 @@ mod tests {
         let tx = make_user_tx();
         let mut buf: *const u8 = std::ptr::null();
         let mut len: u32 = 0;
-        let result = unsafe { SCFTPGetCommandArgData(&tx, 0, &mut buf, &mut len) };
+        let result = unsafe { SCFTPGetCommandArgData(&tx as *const FtpTransaction as *const c_void, 0, &mut buf, &mut len) };
         assert!(result);
         let slice = unsafe { std::slice::from_raw_parts(buf, len as usize) };
         assert_eq!(slice, b"anonymous");
@@ -253,7 +236,7 @@ mod tests {
         tx.arg_offset = 4; // points past end of "PASV"
         let mut buf: *const u8 = std::ptr::null();
         let mut len: u32 = 0;
-        let result = unsafe { SCFTPGetCommandArgData(&tx, 0, &mut buf, &mut len) };
+        let result = unsafe { SCFTPGetCommandArgData(&tx as *const FtpTransaction as *const c_void, 0, &mut buf, &mut len) };
         assert!(!result);
     }
 
@@ -273,7 +256,7 @@ mod tests {
         let mut len: u32 = 0;
         let mut more: bool = false;
         let result =
-            unsafe { SCFTPGetReplyData(&tx, 0, &mut local_id, &mut buf, &mut len, &mut more) };
+            unsafe { SCFTPGetReplyData(&tx as *const FtpTransaction as *const c_void, 0, &mut local_id, &mut buf, &mut len, &mut more) };
         assert!(result);
         assert_eq!(local_id, 1);
         assert!(!more);
@@ -285,7 +268,7 @@ mod tests {
     fn test_mode_match_active() {
         let tx = make_port_tx();
         let md = DetectFtpModeData { active: true };
-        let result = unsafe { SCFTPDetectModeMatch(&tx, &md) };
+        let result = unsafe { SCFTPDetectModeMatch(&tx as *const FtpTransaction as *const c_void, &md) };
         assert!(result);
     }
 
@@ -293,7 +276,7 @@ mod tests {
     fn test_mode_match_passive_no_match() {
         let tx = make_port_tx();
         let md = DetectFtpModeData { active: false };
-        let result = unsafe { SCFTPDetectModeMatch(&tx, &md) };
+        let result = unsafe { SCFTPDetectModeMatch(&tx as *const FtpTransaction as *const c_void, &md) };
         assert!(!result);
     }
 
@@ -302,8 +285,19 @@ mod tests {
         let mut tx = make_user_tx();
         tx.complete = true;
         let d = DetectFtpReplyReceivedData { received: true };
-        let result = unsafe { SCFTPDetectReplyReceivedMatch(&tx, &d) };
+        let result = unsafe { SCFTPDetectReplyReceivedMatch(&tx as *const FtpTransaction as *const c_void, &d) };
         assert!(result);
+
+        // received=false, complete=false: rule asks "no reply" and tx has no reply.
+        let mut tx2 = make_user_tx();
+        tx2.complete = false;
+        let d_no = DetectFtpReplyReceivedData { received: false };
+        let result2 = unsafe { SCFTPDetectReplyReceivedMatch(&tx2 as *const FtpTransaction as *const c_void, &d_no) };
+        assert!(result2);
+
+        // received=true, complete=false: rule asks "reply received" but tx has none — no match.
+        let result3 = unsafe { SCFTPDetectReplyReceivedMatch(&tx2 as *const FtpTransaction as *const c_void, &d) };
+        assert!(!result3);
     }
 
     #[test]
@@ -315,14 +309,74 @@ mod tests {
             arg2: 0,
             mode: DetectUintMode::DetectUintModeEqual,
         };
-        let result = unsafe { SCFTPDetectDynPortMatch(&tx, &data_match) };
+        let result = unsafe { SCFTPDetectDynPortMatch(&tx as *const FtpTransaction as *const c_void, &data_match) };
         assert!(result);
         let data_no_match = DetectUintData::<u16> {
             arg1: 9999,
             arg2: 0,
             mode: DetectUintMode::DetectUintModeEqual,
         };
-        let result = unsafe { SCFTPDetectDynPortMatch(&tx, &data_no_match) };
+        let result = unsafe { SCFTPDetectDynPortMatch(&tx as *const FtpTransaction as *const c_void, &data_no_match) };
         assert!(!result);
+    }
+
+    #[test]
+    fn test_get_completion_code_data() {
+        let mut tx = FtpTransaction::new(1);
+        tx.command = FtpRequestCommand::FTP_COMMAND_USER;
+        tx.command_name = b"USER".to_vec();
+        tx.responses.push(FtpResponseLine {
+            code: 331,
+            is_continuation: false,
+            message: b"Password required".to_vec(),
+            code_str: [b'3', b'3', b'1'],
+        });
+        let mut local_id: u32 = 0;
+        let mut buf: *const u8 = std::ptr::null();
+        let mut len: u32 = 0;
+        let result =
+            unsafe { SCFTPGetCompletionCodeData(&tx as *const FtpTransaction as *const c_void, 0, &mut local_id, &mut buf, &mut len) };
+        assert!(result);
+        assert_eq!(len, 3);
+        assert_eq!(local_id, 1);
+        let slice = unsafe { std::slice::from_raw_parts(buf, len as usize) };
+        assert_eq!(slice, b"331");
+    }
+
+    #[test]
+    fn test_get_reply_data_more() {
+        let mut tx = FtpTransaction::new(1);
+        tx.command = FtpRequestCommand::FTP_COMMAND_USER;
+        tx.command_name = b"USER".to_vec();
+        tx.responses.push(FtpResponseLine {
+            code: 331,
+            is_continuation: true,
+            message: b"First".to_vec(),
+            code_str: [b'3', b'3', b'1'],
+        });
+        tx.responses.push(FtpResponseLine {
+            code: 331,
+            is_continuation: false,
+            message: b"Second".to_vec(),
+            code_str: [b'3', b'3', b'1'],
+        });
+        let mut local_id: u32 = 0;
+        let mut buf: *const u8 = std::ptr::null();
+        let mut len: u32 = 0;
+        let mut more: bool = false;
+
+        let result =
+            unsafe { SCFTPGetReplyData(&tx as *const FtpTransaction as *const c_void, 0, &mut local_id, &mut buf, &mut len, &mut more) };
+        assert!(result);
+        assert!(more);
+        let slice = unsafe { std::slice::from_raw_parts(buf, len as usize) };
+        assert_eq!(slice, b"First");
+
+        let result =
+            unsafe { SCFTPGetReplyData(&tx as *const FtpTransaction as *const c_void, 0, &mut local_id, &mut buf, &mut len, &mut more) };
+        assert!(result);
+        assert!(!more);
+        let slice = unsafe { std::slice::from_raw_parts(buf, len as usize) };
+        assert_eq!(slice, b"Second");
     }
 }
