@@ -63,7 +63,7 @@ static int LuaDatasetGetRef(lua_State *luastate)
         LUA_ERROR("null string");
     }
 
-    Dataset *dataset = DatasetFind(name, DATASET_TYPE_STRING);
+    Dataset *dataset = DatasetSearchByName(name);
     if (dataset == NULL) {
         LUA_ERROR("dataset not found");
     }

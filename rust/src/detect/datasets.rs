@@ -36,9 +36,14 @@ pub enum DatasetType {
     DSSha256,
     DSIpv4,
     DSIpv6,
+    DSCIDR,
 }
 
 use suricata_sys::sys::{Dataset, SCDatasetAdd, SCDatasetAddwRep};
+
+extern "C" {
+    fn DatasetAddCIDRString(set: *mut Dataset, cidr_str: *const c_char) -> i32;
+}
 
 #[no_mangle]
 pub unsafe extern "C" fn ParseDatasets(
@@ -108,6 +113,11 @@ pub unsafe extern "C" fn ParseDatasets(
             }
             DatasetType::DSIpv6 => {
                 if process_ipv6_set(set, v, set_name, filename, no_rep) == -1 {
+                    continue;
+                }
+            }
+            DatasetType::DSCIDR => {
+                if process_cidr_set(set, v, set_name, filename, no_rep) == -1 {
                     continue;
                 }
             }
@@ -261,6 +271,44 @@ unsafe fn process_ipv6_set(
         );
         return -1;
     }
+    0
+}
+
+unsafe fn process_cidr_set(
+    set: &mut Dataset, v: Vec<&str>, set_name: &str, filename: &Path, no_rep: bool,
+) -> i32 {
+    // For CIDR datasets, we add CIDR blocks to radix trees
+    // The CIDR string should be in format like "192.168.1.0/24" or "2001:db8::/32"
+    
+    let cidr_str = v[0];
+    
+    // For now, reputation is not supported for CIDR datasets
+    if !no_rep {
+        SCLogWarning!("Reputation values not supported for CIDR datasets, ignoring");
+    }
+    
+    // Convert the Rust string to a C string
+    let c_str = match std::ffi::CString::new(cidr_str) {
+        Ok(s) => s,
+        Err(_) => {
+            SCLogError!("Failed to convert CIDR string to C string: {}", cidr_str);
+            return -1;
+        }
+    };
+    
+    // Call the C helper function to add the CIDR string to the dataset
+    let result = DatasetAddCIDRString(set, c_str.as_ptr());
+    
+    if result < 0 {
+        SCLogError!(
+            "Failed to add CIDR '{}' to dataset {} from {}",
+            cidr_str,
+            set_name,
+            filename.display()
+        );
+        return -1;
+    }
+    
     0
 }
 

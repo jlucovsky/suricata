@@ -173,10 +173,33 @@ int DetectDatasetBufferMatch(DetectEngineThreadCtx *det_ctx,
         return DetectDatajsonBufferMatch(det_ctx, sd, data, data_len);
     }
 
+    /* CIDR datasets always use a 5-byte (IPv4) or 17-byte (IPv6) encoding:
+     * [address bytes][prefix length].  Build it once here so all commands
+     * below see a uniform format.  For isset/isnotset mask is 0, so the
+     * implied host prefix (32 or 128) is used; the lookup ignores it. */
+    uint8_t cidr_buf[17];
+    const uint8_t *pdata = data;
+    uint32_t pdata_len = data_len;
+    if (sd->set->type == DATASET_TYPE_CIDR) {
+        if (data_len == 4) {
+            memcpy(cidr_buf, data, 4);
+            cidr_buf[4] = sd->mask ? sd->mask : 32;
+            pdata = cidr_buf;
+            pdata_len = 5;
+        } else if (data_len == 16) {
+            memcpy(cidr_buf, data, 16);
+            cidr_buf[16] = sd->mask ? sd->mask : 128;
+            pdata = cidr_buf;
+            pdata_len = 17;
+        } else {
+            return 0;
+        }
+    }
+
     switch (sd->cmd) {
         case DETECT_DATASET_CMD_ISSET: {
             //PrintRawDataFp(stdout, data, data_len);
-            int r = DatasetLookup(sd->set, data, data_len);
+            int r = DatasetLookup(sd->set, pdata, pdata_len);
             if (r != 1 && sd->match_subdomain) {
                 r = DatasetLookupSubdomain(sd->set, data, data_len);
             }
@@ -187,7 +210,7 @@ int DetectDatasetBufferMatch(DetectEngineThreadCtx *det_ctx,
         }
         case DETECT_DATASET_CMD_ISNOTSET: {
             //PrintRawDataFp(stdout, data, data_len);
-            int r = DatasetLookup(sd->set, data, data_len);
+            int r = DatasetLookup(sd->set, pdata, pdata_len);
             if (r != 1 && sd->match_subdomain) {
                 r = DatasetLookupSubdomain(sd->set, data, data_len);
             }
@@ -197,14 +220,13 @@ int DetectDatasetBufferMatch(DetectEngineThreadCtx *det_ctx,
             break;
         }
         case DETECT_DATASET_CMD_SET: {
-            //PrintRawDataFp(stdout, data, data_len);
-            int r = SCDatasetAdd(sd->set, data, data_len);
+            int r = SCDatasetAdd(sd->set, pdata, pdata_len);
             if (r == 1)
                 return 1;
             break;
         }
         case DETECT_DATASET_CMD_UNSET: {
-            int r = DatasetRemove(sd->set, data, data_len);
+            int r = DatasetRemove(sd->set, pdata, pdata_len);
             if (r == 1)
                 return 1;
             break;
@@ -219,7 +241,7 @@ static int DetectDatasetParse(const char *str, char *cmd, int cmd_len, char *nam
         enum DatasetTypes *type, char *load, size_t load_size, char *save, size_t save_size,
         uint64_t *memcap, uint32_t *hashsize, DatasetFormats *format, char *value_key,
         size_t value_key_size, char *array_key, size_t array_key_size, char *enrichment_key,
-        size_t enrichment_key_size, bool *remove_key, bool *match_subdomain)
+        size_t enrichment_key_size, bool *remove_key, bool *match_subdomain, uint8_t *mask)
 {
     bool cmd_set = false;
     bool name_set = false;
@@ -293,6 +315,8 @@ static int DetectDatasetParse(const char *str, char *cmd, int cmd_len, char *nam
                     *type = DATASET_TYPE_IPV6;
                 } else if (strcmp(val, "ip") == 0) {
                     *type = DATASET_TYPE_IPV6;
+                } else if (strcmp(val, "cidr") == 0) {
+                    *type = DATASET_TYPE_CIDR;
                 } else {
                     SCLogError("bad type %s", val);
                     return -1;
@@ -381,6 +405,42 @@ static int DetectDatasetParse(const char *str, char *cmd, int cmd_len, char *nam
                                  " resetting to default",
                             val);
                     *hashsize = 0;
+                }
+            }
+            if (strcmp(key, "mask") == 0) {
+                if (val[0] == '-') {
+                    SCLogError("invalid mask value '%s': must not be negative", val);
+                    return -1;
+                }
+                char *endptr;
+                errno = 0;
+                unsigned long m = strtoul(val, &endptr, 0);
+                if (errno != 0 || endptr == val || *endptr != '\0') {
+                    SCLogError("invalid mask value '%s'", val);
+                    return -1;
+                }
+                if (m <= 128) {
+                    /* direct prefix length: 24, 0x18, etc. */
+                    *mask = (uint8_t)m;
+                } else if (m <= 0xffffffffUL) {
+                    /* IPv4 bitmask notation, e.g. 0xffffff00 == /24.
+                     * Must be a contiguous run of leading 1-bits. */
+                    uint32_t bm = (uint32_t)m;
+                    uint32_t inv = ~bm;
+                    if (inv != 0 && (inv & (inv + 1)) != 0) {
+                        SCLogError("invalid mask value '%s': not a contiguous IPv4 netmask", val);
+                        return -1;
+                    }
+                    uint8_t prefix = 32;
+                    while (inv != 0) {
+                        prefix--;
+                        inv >>= 1;
+                    }
+                    *mask = prefix;
+                } else {
+                    SCLogError(
+                            "invalid mask value '%s': must be 0-128 or a valid IPv4 netmask", val);
+                    return -1;
                 }
             }
         }
@@ -532,6 +592,7 @@ int DetectDatasetSetup (DetectEngineCtx *de_ctx, Signature *s, const char *rawst
     char enrichment_key[SIG_JSON_CONTENT_KEY_LEN] = "";
     bool remove_key = false;
     bool match_subdomain = false;
+    uint8_t mask = 0;
 
     if (DetectBufferGetActiveList(de_ctx, s) == -1) {
         SCLogError("datasets are only supported for sticky buffers");
@@ -544,10 +605,10 @@ int DetectDatasetSetup (DetectEngineCtx *de_ctx, Signature *s, const char *rawst
         SCReturnInt(-1);
     }
 
-    if (!DetectDatasetParse(rawstr, cmd_str, sizeof(cmd_str), name, sizeof(name), &type, load,
+    if (DetectDatasetParse(rawstr, cmd_str, sizeof(cmd_str), name, sizeof(name), &type, load,
                 sizeof(load), save, sizeof(save), &memcap, &hashsize, &format, value_key,
                 sizeof(value_key), array_key, sizeof(array_key), enrichment_key,
-                sizeof(enrichment_key), &remove_key, &match_subdomain)) {
+                sizeof(enrichment_key), &remove_key, &match_subdomain, &mask) != 1) {
         return -1;
     }
 
@@ -581,6 +642,20 @@ int DetectDatasetSetup (DetectEngineCtx *de_ctx, Signature *s, const char *rawst
             SCLogError("'match subdomain' only supports type string");
             return -1;
         }
+    }
+
+    if (type == DATASET_TYPE_CIDR) {
+        if (strlen(save) != 0) {
+            SCLogError("save/state is not supported for CIDR datasets");
+            return -1;
+        }
+        if (mask > 0 && cmd != DETECT_DATASET_CMD_SET && cmd != DETECT_DATASET_CMD_UNSET) {
+            SCLogError("mask is only supported for CIDR datasets with 'set' and 'unset' commands");
+            return -1;
+        }
+    } else if (mask > 0) {
+        SCLogError("mask is only supported for CIDR datasets");
+        return -1;
     }
 
     if ((format == DATASET_FORMAT_JSON) || (format == DATASET_FORMAT_NDJSON)) {
@@ -647,6 +722,7 @@ int DetectDatasetSetup (DetectEngineCtx *de_ctx, Signature *s, const char *rawst
 
     cd->set = set;
     cd->cmd = cmd;
+    cd->mask = mask;
     cd->format = format;
     cd->match_subdomain = match_subdomain;
     if ((format == DATASET_FORMAT_JSON) || (format == DATASET_FORMAT_NDJSON)) {
