@@ -28,10 +28,7 @@
 #include "suricata-common.h"
 
 #include "app-layer-ftp.h"
-#include "app-layer.h"
-#include "app-layer-parser.h"
 #include "app-layer-expectation.h"
-#include "app-layer-detect-proto.h"
 
 #include "rust.h"
 
@@ -77,8 +74,6 @@ bool SCFTPDataExpectCreate(Flow *f, const uint8_t *file_name, uint32_t file_name
     return true;
 }
 
-static StreamingBufferConfig sbcfg = STREAMING_BUFFER_CONFIG_INITIALIZER;
-
 const FtpTransferCmd *SCFTPDataFlowGetTransferCmd(const Flow *f)
 {
     return (const FtpTransferCmd *)SCFlowGetStorageById(f, AppLayerExpectationGetFlowId());
@@ -92,42 +87,4 @@ void SCFTPDataFlowFreeTransferCmd(Flow *f)
 void SCFTPDataFlowSetParentId(Flow *f, uint64_t parent_id)
 {
     f->parent_id = parent_id;
-}
-
-const StreamingBufferConfig *SCFTPDataGetSbcfg(void)
-{
-    return &sbcfg;
-}
-
-/* FTPData parser functions moved to Rust (rust/src/ftpdata/ftpdata.rs).
- * Bridge entry points (SCFTPDataFlowGetTransferCmd etc.) remain above.
- */
-
-void RegisterFTPParsers(void)
-{
-    const char *proto_name = "ftp";
-    const char *proto_data_name = "ftp-data";
-
-    if (SCAppLayerProtoDetectConfProtoDetectionEnabled("tcp", proto_name)) {
-        AppLayerProtoDetectRegisterProtocol(ALPROTO_FTPDATA, proto_data_name);
-    }
-
-    /* Register the Rust FTP command parser (handles FTP protocol detection,
-     * state machine, transactions, and probing parsers). */
-    SCFTPRegisterParsers();
-
-    if (SCAppLayerParserConfParserEnabled("tcp", proto_name)) {
-        AppLayerRegisterExpectationProto(IPPROTO_TCP, ALPROTO_FTPDATA);
-
-        sbcfg.buf_size = 4096;
-        sbcfg.Calloc = FTPCalloc;
-        sbcfg.Realloc = FTPRealloc;
-        sbcfg.Free = FTPFree;
-
-        SCFTPDataRegisterParsers(ALPROTO_FTPDATA);
-
-        SCFTPInitMemcap();
-    } else {
-        SCLogInfo("Parser disabled for %s protocol. Protocol detection still on.", proto_name);
-    }
 }

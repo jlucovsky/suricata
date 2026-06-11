@@ -28,8 +28,6 @@
 #include "rust.h"
 #include "app-layer-parser.h"
 
-void RegisterFTPParsers(void);
-
 bool SCFTPDataExpectCreate(Flow *f, const uint8_t *file_name, uint32_t file_name_len, uint8_t cmd,
         uint8_t direction, uint16_t dyn_port);
 

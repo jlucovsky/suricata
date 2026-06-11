@@ -30,13 +30,14 @@ use crate::applayer::{
 use crate::core::{IPPROTO_TCP, STREAM_TOCLIENT, STREAM_TOSERVER};
 use crate::ftp::constant::{FtpDataStateValues, FtpRequestCommand};
 use crate::ftp::ftp::FtpTransferCmd;
+use crate::ftp::memcap::{FTPCalloc, FTPFree, FTPRealloc};
 use suricata_sys::sys::{
-    AppLayerGetFileState, AppLayerParserState, AppProto,
+    AppLayerGetFileState, AppLayerParserState, AppProto, AppProtoEnum,
     FileAppendData, FileCloseFileById, FileOpenFileWithId,
-    SCAppLayerParserRegisterParserAcceptableDataDirection,
-    SCAppLayerParserStateIssetFlag, SCAppLayerParserRegisterLogger,
-    SCFileFlowFlagsToFlags, StreamingBufferConfig, StreamSlice,
-    FileContainer, Flow,
+    SCAppLayerParserConfParserEnabled, SCAppLayerParserRegisterLogger,
+    SCAppLayerParserRegisterParserAcceptableDataDirection, SCAppLayerParserStateIssetFlag,
+    SCAppLayerProtoDetectConfProtoDetectionEnabled, SCFileFlowFlagsToFlags, StreamingBufferConfig,
+    StreamSlice, FileContainer, Flow,
 };
 #[cfg(not(test))]
 use suricata_sys::sys::FileContainerRecycle;
@@ -50,13 +51,24 @@ extern "C" {
     fn SCFTPDataFlowFreeTransferCmd(f: *mut Flow);
     /// Sets `f->parent_id`.
     fn SCFTPDataFlowSetParentId(f: *mut Flow, parent_id: u64);
-    /// Returns a pointer to the static `StreamingBufferConfig` used for
-    /// FTP-DATA file operations (configured with the FTP memcap allocators).
-    pub fn SCFTPDataGetSbcfg() -> *const StreamingBufferConfig;
+
+    fn AppLayerProtoDetectRegisterProtocol(alproto: AppProto, name: *const c_char);
+    fn AppLayerRegisterExpectationProto(ipproto: u8, alproto: AppProto);
 }
+
+const ALPROTO_FTPDATA: AppProto = AppProtoEnum::ALPROTO_FTPDATA as AppProto;
 
 const FTPDATA_FINISHED: u8 = FtpDataStateValues::FTPDATA_STATE_FINISHED as u8;
 const FTPDATA_IN_PROGRESS: u8 = FtpDataStateValues::FTPDATA_STATE_IN_PROGRESS as u8;
+
+static mut SBCFG: StreamingBufferConfig = StreamingBufferConfig {
+    buf_size: 0,
+    max_regions: 0,
+    region_gap: 0,
+    Calloc: None,
+    Realloc: None,
+    Free: None,
+};
 
 /// FTP-DATA app-layer state.  Also serves as the sole transaction.
 pub struct FtpDataState {
@@ -89,7 +101,7 @@ impl FtpDataState {
     unsafe fn parse(
         &mut self, flow: *mut Flow, pstate: *mut AppLayerParserState, input: &[u8], direction: u8,
     ) -> AppLayerResult {
-        let sbcfg = SCFTPDataGetSbcfg();
+        let sbcfg = std::ptr::addr_of!(SBCFG);
 
         let eof = if direction & STREAM_TOSERVER != 0 {
             SCAppLayerParserStateIssetFlag(pstate, APP_LAYER_PARSER_EOF_TS) != 0
@@ -197,10 +209,7 @@ impl Drop for FtpDataState {
     fn drop(&mut self) {
         #[cfg(not(test))]
         unsafe {
-            let sbcfg = SCFTPDataGetSbcfg();
-            if !sbcfg.is_null() {
-                FileContainerRecycle(&mut self.files, sbcfg);
-            }
+            FileContainerRecycle(&mut self.files, std::ptr::addr_of!(SBCFG));
         }
     }
 }
@@ -283,7 +292,7 @@ pub unsafe extern "C" fn SCFTPDataGetTxFiles(
     if direction == state.direction {
         AppLayerGetFileState {
             fc: &mut state.files,
-            cfg: SCFTPDataGetSbcfg(),
+            cfg: std::ptr::addr_of!(SBCFG),
         }
     } else {
         AppLayerGetFileState::default()
@@ -303,12 +312,11 @@ export_state_data_get!(ftpdata_get_state_data, FtpDataState);
 // ─── Parser registration ──────────────────────────────────────────────────────
 
 const PARSER_NAME: &[u8] = b"ftp-data\0";
+const PROTO_NAME: &[u8] = b"ftp\0";
+const PROTO_DATA_NAME: &[u8] = b"ftp-data\0";
+const TCP_PROTO_STR: &[u8] = b"tcp\0";
 
-/// Registers the FTP-DATA Rust parser.  Called from C `RegisterFTPParsers`
-/// after `ALPROTO_FTPDATA` is assigned and `AppLayerRegisterExpectationProto`
-/// is called.
-#[no_mangle]
-pub unsafe extern "C" fn SCFTPDataRegisterParsers(alproto: AppProto) {
+unsafe fn register_ftpdata_parser() {
     use crate::applayer::RustParser;
 
     let parser = RustParser {
@@ -345,11 +353,45 @@ pub unsafe extern "C" fn SCFTPDataRegisterParsers(alproto: AppProto) {
         get_state_name_by_id: None,
     };
 
-    AppLayerRegisterParser(&parser, alproto);
-    SCAppLayerParserRegisterLogger(IPPROTO_TCP, alproto);
+    AppLayerRegisterParser(&parser, ALPROTO_FTPDATA);
+    SCAppLayerParserRegisterLogger(IPPROTO_TCP, ALPROTO_FTPDATA);
     SCAppLayerParserRegisterParserAcceptableDataDirection(
         IPPROTO_TCP,
-        alproto,
+        ALPROTO_FTPDATA,
         STREAM_TOSERVER | STREAM_TOCLIENT,
     );
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn RegisterFTPParsers() {
+    if SCAppLayerProtoDetectConfProtoDetectionEnabled(
+        TCP_PROTO_STR.as_ptr() as *const c_char,
+        PROTO_NAME.as_ptr() as *const c_char,
+    ) != 0
+    {
+        AppLayerProtoDetectRegisterProtocol(
+            ALPROTO_FTPDATA,
+            PROTO_DATA_NAME.as_ptr() as *const c_char,
+        );
+    }
+
+    crate::ftp::ftp::SCFTPRegisterParsers();
+
+    if SCAppLayerParserConfParserEnabled(
+        TCP_PROTO_STR.as_ptr() as *const c_char,
+        PROTO_NAME.as_ptr() as *const c_char,
+    ) != 0
+    {
+        AppLayerRegisterExpectationProto(IPPROTO_TCP as u8, ALPROTO_FTPDATA);
+
+        SBCFG.buf_size = 4096;
+        SBCFG.Calloc = Some(FTPCalloc);
+        SBCFG.Realloc = Some(FTPRealloc);
+        SBCFG.Free = Some(FTPFree);
+
+        register_ftpdata_parser();
+        crate::ftp::memcap::SCFTPInitMemcap();
+    } else {
+        SCLogInfo!("Parser disabled for ftp protocol. Protocol detection still on.");
+    }
 }
