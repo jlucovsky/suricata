@@ -33,6 +33,7 @@ use crate::direction::Direction;
 use crate::flow::{flow_get_alproto_tc, flow_get_alproto_ts, flow_get_todst_bytecount, Flow};
 use crate::ftp::constant::*;
 use crate::ftp::event::FtpEvent;
+use crate::ftp::memcap::ftp_check_memcap;
 use crate::ftp::parser::{
     extract_line, is_preliminary_response, parse_eprt_from_line, parse_epsv_port,
     parse_pasv_port, parse_port_from_line, parse_request_line, parse_response_line,
@@ -765,7 +766,9 @@ impl FtpState {
                         _ => {}
                     }
 
-                    if tx.responses.len() < MAX_RESPONSE_LINES {
+                    if tx.responses.len() < MAX_RESPONSE_LINES
+                        && ftp_check_memcap(line.len() as u64)
+                    {
                         tx.responses.push(resp);
                     }
 

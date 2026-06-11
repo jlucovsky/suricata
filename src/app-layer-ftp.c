@@ -38,125 +38,6 @@
 #include "util-misc.h"
 #include "util-validate.h"
 
-uint64_t ftp_config_memcap = 0;
-uint32_t ftp_config_maxtx = 1024;
-uint32_t ftp_max_line_len = 4096;
-
-SC_ATOMIC_DECLARE(uint64_t, ftp_memuse);
-SC_ATOMIC_DECLARE(uint64_t, ftp_memcap);
-
-static void FTPParseMemcap(void)
-{
-    SCFTPGetConfigValues(&ftp_config_memcap, &ftp_config_maxtx, &ftp_max_line_len);
-
-    SC_ATOMIC_INIT(ftp_memuse);
-    SC_ATOMIC_INIT(ftp_memcap);
-}
-
-static void FTPIncrMemuse(uint64_t size)
-{
-    (void)SC_ATOMIC_ADD(ftp_memuse, size);
-}
-
-static void FTPDecrMemuse(uint64_t size)
-{
-    (void)SC_ATOMIC_SUB(ftp_memuse, size);
-}
-
-uint64_t FTPMemuseGlobalCounter(void)
-{
-    uint64_t tmpval = SC_ATOMIC_GET(ftp_memuse);
-    return tmpval;
-}
-
-uint64_t FTPMemcapGlobalCounter(void)
-{
-    uint64_t tmpval = SC_ATOMIC_GET(ftp_memcap);
-    return tmpval;
-}
-
-int FTPSetMemcap(uint64_t size)
-{
-    if ((uint64_t)SC_ATOMIC_GET(ftp_memcap) < size) {
-        SC_ATOMIC_SET(ftp_memcap, size);
-        return 1;
-    }
-
-    return 0;
-}
-
-/**
- *  \brief Check if alloc'ing "size" would mean we're over memcap
- *
- *  \retval 1 if in bounds
- *  \retval 0 if not in bounds
- */
-static int FTPCheckMemcap(uint64_t size)
-{
-    if (ftp_config_memcap == 0 || size + SC_ATOMIC_GET(ftp_memuse) <= ftp_config_memcap)
-        return 1;
-    (void) SC_ATOMIC_ADD(ftp_memcap, 1);
-    return 0;
-}
-
-static void *FTPCalloc(size_t n, size_t size)
-{
-    if (FTPCheckMemcap((uint32_t)(n * size)) == 0) {
-        sc_errno = SC_ELIMIT;
-        return NULL;
-    }
-
-    void *ptr = SCCalloc(n, size);
-
-    if (unlikely(ptr == NULL)) {
-        sc_errno = SC_ENOMEM;
-        return NULL;
-    }
-
-    FTPIncrMemuse((uint64_t)(n * size));
-    return ptr;
-}
-
-static void *FTPRealloc(void *ptr, size_t orig_size, size_t size)
-{
-    if (FTPCheckMemcap((uint32_t)(size - orig_size)) == 0) {
-        sc_errno = SC_ELIMIT;
-        return NULL;
-    }
-
-    void *rptr = SCRealloc(ptr, size);
-    if (rptr == NULL) {
-        sc_errno = SC_ENOMEM;
-        return NULL;
-    }
-
-    if (size > orig_size) {
-        FTPIncrMemuse(size - orig_size);
-    } else {
-        FTPDecrMemuse(orig_size - size);
-    }
-
-    return rptr;
-}
-
-static void FTPFree(void *ptr, size_t size)
-{
-    SCFree(ptr);
-
-    FTPDecrMemuse((uint64_t)size);
-}
-
-static void FtpTransferCmdFree(void *data)
-{
-    FtpTransferCmd *cmd = (FtpTransferCmd *)data;
-    if (cmd == NULL)
-        return;
-    if (cmd->file_name) {
-        FTPFree((void *)cmd->file_name, cmd->file_len + 1);
-    }
-    SCFTPTransferCmdFree(cmd);
-    FTPDecrMemuse((uint64_t)sizeof(FtpTransferCmd));
-}
 
 /**
  * \brief Bridge called from Rust SCFTPParseRequest when a STOR/RETR expectation
@@ -169,13 +50,13 @@ bool SCFTPDataExpectCreate(Flow *f, const uint8_t *file_name, uint32_t file_name
     FtpTransferCmd *data = SCFTPTransferCmdNew();
     if (data == NULL)
         return false;
-    FTPIncrMemuse((uint64_t)sizeof(*data));
-    data->data_free = FtpTransferCmdFree;
+    SCFTPIncrMemuse((uint64_t)sizeof(*data));
+    data->data_free = SCFTPTransferCmdDataFree;
 
     uint32_t fname_len = MIN(SC_FILENAME_MAX - 1, file_name_len);
     data->file_name = FTPCalloc(fname_len + 1, sizeof(char));
     if (data->file_name == NULL) {
-        FtpTransferCmdFree(data);
+        SCFTPTransferCmdDataFree(data);
         return false;
     }
     data->file_name[fname_len] = 0;
@@ -187,7 +68,7 @@ bool SCFTPDataExpectCreate(Flow *f, const uint8_t *file_name, uint32_t file_name
 
     int ret = AppLayerExpectationCreate(f, direction, 0, dyn_port, ALPROTO_FTPDATA, data);
     if (ret == -1) {
-        FtpTransferCmdFree(data);
+        SCFTPTransferCmdDataFree(data);
         SCLogDebug("No expectation created.");
         return false;
     }
@@ -245,7 +126,7 @@ void RegisterFTPParsers(void)
 
         SCFTPDataRegisterParsers(ALPROTO_FTPDATA);
 
-        FTPParseMemcap();
+        SCFTPInitMemcap();
     } else {
         SCLogInfo("Parser disabled for %s protocol. Protocol detection still on.", proto_name);
     }

@@ -22,4 +22,5 @@ pub mod detect;
 pub mod event;
 pub mod ftp;
 pub mod logger;
+pub mod memcap;
 pub mod parser;
