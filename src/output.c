@@ -66,7 +66,6 @@
 #include "log-stats.h"
 #include "output-json-nfs.h"
 #include "output-json-ftp.h"
-// for misplaced EveFTPDataAddMetadata
 #include "app-layer-ftp.h"
 #include "output-json-smb.h"
 #include "output-json-ike.h"
@@ -967,7 +966,7 @@ void OutputRegisterRootLoggers(void)
     // ALPROTO_NFS special: uses state
     // underscore instead of dash for ftp_data
     RegisterSimpleJsonApplayerLogger(
-            ALPROTO_FTPDATA, (EveJsonSimpleTxLogFunc)EveFTPDataAddMetadata, "ftp_data");
+            ALPROTO_FTPDATA, (EveJsonSimpleTxLogFunc)SCFTPDataLogJsonRecord, "ftp_data");
     RegisterSimpleJsonApplayerLogger(
             ALPROTO_TFTP, (EveJsonSimpleTxLogFunc)SCTftpLogJsonRequest, NULL);
     // ALPROTO_IKE special: uses state

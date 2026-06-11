@@ -1,4 +1,4 @@
-/* Copyright (C) 2017-2020 Open Information Security Foundation
+/* Copyright (C) 2017-2026 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -101,12 +101,11 @@ static int DetectFtpdataMatch(DetectEngineThreadCtx *det_ctx,
         const Signature *s, const SigMatchCtx *m)
 {
     const DetectFtpdataData *ftpcommandd = (const DetectFtpdataData *) m;
-    const FtpDataState *ftp_state = (const FtpDataState *)state;
 
-    if (ftp_state == NULL)
+    if (state == NULL)
         return 0;
 
-    return ftpcommandd->command == ftp_state->command;
+    return ftpcommandd->command == (FtpRequestCommand)SCFTPDataGetCommandValue(state);
 }
 
 /**

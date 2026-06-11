@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2026 Open Information Security Foundation
+/* Copyright (C) 2026 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -15,25 +15,14 @@
  * 02110-1301, USA.
  */
 
-/**
- * \file
- *
- * \author Pablo Rincon Crespo <pablo.rincon.crespo@gmail.com>
- * \author Jeff Lucovsky <jeff@lucovsky.org>
- */
+//! FTP-DATA detect support.
+//!
+//! The `ftpdata_command` keyword match function lives in C (detect-ftpdata.c)
+//! and accesses the FTP-DATA state via `SCFTPDataGetCommandValue`, exported
+//! here, rather than casting to the Rust struct directly.
+//!
+//! A full port of the keyword registration is left for a follow-up commit.
 
-#ifndef SURICATA_APP_LAYER_FTP_H
-#define SURICATA_APP_LAYER_FTP_H
-
-#include "rust.h"
-#include "app-layer-parser.h"
-
-void RegisterFTPParsers(void);
-int FTPSetMemcap(uint64_t size);
-uint64_t FTPMemuseGlobalCounter(void);
-uint64_t FTPMemcapGlobalCounter(void);
-
-bool SCFTPDataExpectCreate(Flow *f, const uint8_t *file_name, uint32_t file_name_len, uint8_t cmd,
-        uint8_t direction, uint16_t dyn_port);
-
-#endif /* SURICATA_APP_LAYER_FTP_H */
+// SCFTPDataGetCommandValue is defined in ftpdata.rs and re-exported here
+// for documentation purposes.  The symbol is visible to C through the
+// normal #[no_mangle] export mechanism.

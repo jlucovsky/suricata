@@ -198,264 +198,29 @@ bool SCFTPDataExpectCreate(Flow *f, const uint8_t *file_name, uint32_t file_name
 
 static StreamingBufferConfig sbcfg = STREAMING_BUFFER_CONFIG_INITIALIZER;
 
-/**
- * \brief This function is called to retrieve a ftp-data request/response
- * \param ftp_state the ftp data state structure for the parser
- * \param output the resulting output
- *
- * \retval APP_LAYER_OK when input was processed successfully
- * \retval APP_LAYER_ERROR when an unrecoverable error was encountered
+const FtpTransferCmd *SCFTPDataFlowGetTransferCmd(const Flow *f)
+{
+    return (const FtpTransferCmd *)SCFlowGetStorageById(f, AppLayerExpectationGetFlowId());
+}
+
+void SCFTPDataFlowFreeTransferCmd(Flow *f)
+{
+    SCFlowFreeStorageById(f, AppLayerExpectationGetFlowId());
+}
+
+void SCFTPDataFlowSetParentId(Flow *f, uint64_t parent_id)
+{
+    f->parent_id = parent_id;
+}
+
+const StreamingBufferConfig *SCFTPDataGetSbcfg(void)
+{
+    return &sbcfg;
+}
+
+/* FTPData parser functions moved to Rust (rust/src/ftpdata/ftpdata.rs).
+ * Bridge entry points (SCFTPDataFlowGetTransferCmd etc.) remain above.
  */
-static AppLayerResult FTPDataParse(Flow *f, FtpDataState *ftpdata_state,
-        AppLayerParserState *pstate, StreamSlice stream_slice, void *local_data, uint8_t direction)
-{
-    const uint8_t *input = StreamSliceGetData(&stream_slice);
-    uint32_t input_len = StreamSliceGetDataLen(&stream_slice);
-    const bool eof = (direction & STREAM_TOSERVER)
-                             ? SCAppLayerParserStateIssetFlag(pstate, APP_LAYER_PARSER_EOF_TS) != 0
-                             : SCAppLayerParserStateIssetFlag(pstate, APP_LAYER_PARSER_EOF_TC) != 0;
-
-    SCTxDataUpdateFileFlags(&ftpdata_state->tx_data, ftpdata_state->state_data.file_flags);
-    if (ftpdata_state->tx_data.file_tx == 0)
-        ftpdata_state->tx_data.file_tx = direction & (STREAM_TOSERVER | STREAM_TOCLIENT);
-    if (direction & STREAM_TOSERVER) {
-        ftpdata_state->tx_data.updated_ts = true;
-    } else {
-        ftpdata_state->tx_data.updated_tc = true;
-    }
-    /* we depend on detection engine for file pruning */
-    const uint16_t flags = SCFileFlowFlagsToFlags(ftpdata_state->tx_data.file_flags, direction);
-    int ret = 0;
-
-    SCLogDebug("FTP-DATA input_len %u flags %04x dir %d/%s EOF %s", input_len, flags, direction,
-            (direction & STREAM_TOSERVER) ? "toserver" : "toclient", eof ? "true" : "false");
-
-    SCLogDebug("FTP-DATA flags %04x dir %d", flags, direction);
-    if (input_len && ftpdata_state->files == NULL) {
-        FtpTransferCmd *data =
-                (FtpTransferCmd *)SCFlowGetStorageById(f, AppLayerExpectationGetFlowId());
-        if (data == NULL) {
-            SCReturnStruct(APP_LAYER_ERROR);
-        }
-
-        /* we shouldn't get data in the wrong dir. Don't set things up for this dir */
-        if ((direction & data->direction) == 0) {
-            // TODO set event for data in wrong direction
-            SCLogDebug("input %u not for our direction (%s): %s/%s", input_len,
-                    (direction & STREAM_TOSERVER) ? "toserver" : "toclient",
-                    data->cmd == FTP_COMMAND_STOR ? "STOR" : "RETR",
-                    (data->direction & STREAM_TOSERVER) ? "toserver" : "toclient");
-            SCReturnStruct(APP_LAYER_OK);
-        }
-
-        ftpdata_state->files = FileContainerAlloc();
-        if (ftpdata_state->files == NULL) {
-            SCFlowFreeStorageById(f, AppLayerExpectationGetFlowId());
-            SCReturnStruct(APP_LAYER_ERROR);
-        }
-
-        ftpdata_state->file_name = data->file_name;
-        ftpdata_state->file_len = data->file_len;
-        data->file_name = NULL;
-        data->file_len = 0;
-        f->parent_id = data->flow_id;
-        ftpdata_state->command = data->cmd;
-        switch (data->cmd) {
-            case FTP_COMMAND_STOR:
-                ftpdata_state->direction = data->direction;
-                SCLogDebug("STOR data to %s",
-                        (ftpdata_state->direction & STREAM_TOSERVER) ? "toserver" : "toclient");
-                break;
-            case FTP_COMMAND_RETR:
-                ftpdata_state->direction = data->direction;
-                SCLogDebug("RETR data to %s",
-                        (ftpdata_state->direction & STREAM_TOSERVER) ? "toserver" : "toclient");
-                break;
-            default:
-                break;
-        }
-
-        /* open with fixed track_id 0 as we can have just one
-         * file per ftp-data flow. */
-        if (FileOpenFileWithId(ftpdata_state->files, &sbcfg,
-                         0ULL, (uint8_t *) ftpdata_state->file_name,
-                         ftpdata_state->file_len,
-                         input, input_len, flags) != 0) {
-            SCLogDebug("Can't open file");
-            ret = -1;
-        }
-        SCFlowFreeStorageById(f, AppLayerExpectationGetFlowId());
-        ftpdata_state->tx_data.files_opened = 1;
-    } else {
-        if ((direction & ftpdata_state->direction) == 0) {
-            if (input_len) {
-                // TODO set event for data in wrong direction
-            }
-            SCLogDebug("input %u not for us (%s): %s/%s", input_len,
-                    (direction & STREAM_TOSERVER) ? "toserver" : "toclient",
-                    ftpdata_state->command == FTP_COMMAND_STOR ? "STOR" : "RETR",
-                    (ftpdata_state->direction & STREAM_TOSERVER) ? "toserver" : "toclient");
-            SCReturnStruct(APP_LAYER_OK);
-        }
-        if (ftpdata_state->state == FTPDATA_STATE_FINISHED) {
-            SCLogDebug("state is already finished");
-            DEBUG_VALIDATE_BUG_ON(input_len); // data after state finished is a bug.
-            SCReturnStruct(APP_LAYER_OK);
-        }
-        if (input_len != 0) {
-            ret = FileAppendData(ftpdata_state->files, &sbcfg, input, input_len);
-            if (ret == -2) {
-                ret = 0;
-                SCLogDebug("FileAppendData() - file no longer being extracted");
-                goto out;
-            } else if (ret < 0) {
-                SCLogDebug("FileAppendData() failed: %d", ret);
-                ret = -2;
-                goto out;
-            }
-        }
-    }
-
-    DEBUG_VALIDATE_BUG_ON((direction & ftpdata_state->direction) == 0); // should be unreachable
-    if (eof) {
-        ret = FileCloseFile(ftpdata_state->files, &sbcfg, NULL, 0, flags);
-        ftpdata_state->state = FTPDATA_STATE_FINISHED;
-        SCLogDebug("closed because of eof: state now FTPDATA_STATE_FINISHED");
-    }
-out:
-    if (ret < 0) {
-        SCReturnStruct(APP_LAYER_ERROR);
-    }
-    SCReturnStruct(APP_LAYER_OK);
-}
-
-static AppLayerResult FTPDataParseRequest(Flow *f, void *ftp_state, AppLayerParserState *pstate,
-        StreamSlice stream_slice, void *local_data)
-{
-    return FTPDataParse(f, ftp_state, pstate, stream_slice, local_data, STREAM_TOSERVER);
-}
-
-static AppLayerResult FTPDataParseResponse(Flow *f, void *ftp_state, AppLayerParserState *pstate,
-        StreamSlice stream_slice, void *local_data)
-{
-    return FTPDataParse(f, ftp_state, pstate, stream_slice, local_data, STREAM_TOCLIENT);
-}
-
-#ifdef DEBUG
-static SCMutex ftpdata_state_mem_lock = SCMUTEX_INITIALIZER;
-static uint64_t ftpdata_state_memuse = 0;
-static uint64_t ftpdata_state_memcnt = 0;
-#endif
-
-static void *FTPDataStateAlloc(void *orig_state, AppProto proto_orig)
-{
-    void *s = FTPCalloc(1, sizeof(FtpDataState));
-    if (unlikely(s == NULL))
-        return NULL;
-
-    FtpDataState *state = (FtpDataState *) s;
-    state->state = FTPDATA_STATE_IN_PROGRESS;
-
-#ifdef DEBUG
-    SCMutexLock(&ftpdata_state_mem_lock);
-    ftpdata_state_memcnt++;
-    ftpdata_state_memuse+=sizeof(FtpDataState);
-    SCMutexUnlock(&ftpdata_state_mem_lock);
-#endif
-    return s;
-}
-
-static void FTPDataStateFree(void *s)
-{
-    FtpDataState *fstate = (FtpDataState *) s;
-
-    SCAppLayerTxDataCleanup(&fstate->tx_data);
-
-    if (fstate->file_name != NULL) {
-        FTPFree(fstate->file_name, fstate->file_len + 1);
-    }
-
-    FileContainerFree(fstate->files, &sbcfg);
-
-    FTPFree(s, sizeof(FtpDataState));
-#ifdef DEBUG
-    SCMutexLock(&ftpdata_state_mem_lock);
-    ftpdata_state_memcnt--;
-    ftpdata_state_memuse-=sizeof(FtpDataState);
-    SCMutexUnlock(&ftpdata_state_mem_lock);
-#endif
-}
-
-static AppLayerTxData *FTPDataGetTxData(void *vtx)
-{
-    FtpDataState *ftp_state = (FtpDataState *)vtx;
-    return &ftp_state->tx_data;
-}
-
-static AppLayerStateData *FTPDataGetStateData(void *vstate)
-{
-    FtpDataState *ftp_state = (FtpDataState *)vstate;
-    return &ftp_state->state_data;
-}
-
-static void FTPDataStateTransactionFree(void *state, uint64_t tx_id)
-{
-    /* do nothing */
-}
-
-static void *FTPDataGetTx(void *state, uint64_t tx_id)
-{
-    FtpDataState *ftp_state = (FtpDataState *)state;
-    return ftp_state;
-}
-
-static uint64_t FTPDataGetTxCnt(void *state)
-{
-    /* ftp-data is single tx */
-    return 1;
-}
-
-static int FTPDataGetAlstateProgress(void *tx, uint8_t direction)
-{
-    FtpDataState *ftpdata_state = (FtpDataState *)tx;
-    if (direction == ftpdata_state->direction)
-        return ftpdata_state->state;
-    else
-        return FTPDATA_STATE_FINISHED;
-}
-
-static AppLayerGetFileState FTPDataStateGetTxFiles(void *tx, uint8_t direction)
-{
-    FtpDataState *ftpdata_state = (FtpDataState *)tx;
-    AppLayerGetFileState files = { .fc = NULL, .cfg = &sbcfg };
-
-    if (direction == ftpdata_state->direction)
-        files.fc = ftpdata_state->files;
-
-    return files;
-}
-
-bool EveFTPDataAddMetadata(void *vtx, SCJsonBuilder *jb)
-{
-    const FtpDataState *ftp_state = (FtpDataState *)vtx;
-    SCJbOpenObject(jb, "ftp_data");
-
-    if (ftp_state->file_name) {
-        SCJbSetStringFromBytes(jb, "filename", ftp_state->file_name, ftp_state->file_len);
-    }
-    switch (ftp_state->command) {
-        case FTP_COMMAND_STOR:
-            JB_SET_STRING(jb, "command", "STOR");
-            break;
-        case FTP_COMMAND_RETR:
-            JB_SET_STRING(jb, "command", "RETR");
-            break;
-        default:
-            break;
-    }
-    SCJbClose(jb);
-    return true;
-}
 
 void RegisterFTPParsers(void)
 {
@@ -472,30 +237,13 @@ void RegisterFTPParsers(void)
 
     if (SCAppLayerParserConfParserEnabled("tcp", proto_name)) {
         AppLayerRegisterExpectationProto(IPPROTO_TCP, ALPROTO_FTPDATA);
-        AppLayerParserRegisterParser(
-                IPPROTO_TCP, ALPROTO_FTPDATA, STREAM_TOSERVER, FTPDataParseRequest);
-        AppLayerParserRegisterParser(
-                IPPROTO_TCP, ALPROTO_FTPDATA, STREAM_TOCLIENT, FTPDataParseResponse);
-        AppLayerParserRegisterStateFuncs(
-                IPPROTO_TCP, ALPROTO_FTPDATA, FTPDataStateAlloc, FTPDataStateFree);
-        SCAppLayerParserRegisterParserAcceptableDataDirection(
-                IPPROTO_TCP, ALPROTO_FTPDATA, STREAM_TOSERVER | STREAM_TOCLIENT);
-        AppLayerParserRegisterTxFreeFunc(IPPROTO_TCP, ALPROTO_FTPDATA, FTPDataStateTransactionFree);
-        AppLayerParserRegisterGetTxFilesFunc(IPPROTO_TCP, ALPROTO_FTPDATA, FTPDataStateGetTxFiles);
-        AppLayerParserRegisterGetTx(IPPROTO_TCP, ALPROTO_FTPDATA, FTPDataGetTx);
-        AppLayerParserRegisterTxDataFunc(IPPROTO_TCP, ALPROTO_FTPDATA, FTPDataGetTxData);
-        AppLayerParserRegisterStateDataFunc(IPPROTO_TCP, ALPROTO_FTPDATA, FTPDataGetStateData);
-        AppLayerParserRegisterGetTxCnt(IPPROTO_TCP, ALPROTO_FTPDATA, FTPDataGetTxCnt);
-        AppLayerParserRegisterGetStateProgressFunc(
-                IPPROTO_TCP, ALPROTO_FTPDATA, FTPDataGetAlstateProgress);
-        AppLayerParserRegisterStateProgressCompletionStatus(
-                ALPROTO_FTPDATA, FTPDATA_STATE_FINISHED, FTPDATA_STATE_FINISHED);
-        SCAppLayerParserRegisterLogger(IPPROTO_TCP, ALPROTO_FTPDATA);
 
         sbcfg.buf_size = 4096;
         sbcfg.Calloc = FTPCalloc;
         sbcfg.Realloc = FTPRealloc;
         sbcfg.Free = FTPFree;
+
+        SCFTPDataRegisterParsers(ALPROTO_FTPDATA);
 
         FTPParseMemcap();
     } else {

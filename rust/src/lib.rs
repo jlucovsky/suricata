@@ -102,6 +102,7 @@ pub mod dcerpc;
 pub mod dnp3;
 pub mod dns;
 pub mod ftp;
+pub mod ftpdata;
 pub mod krb;
 pub mod mdns;
 pub mod modbus;
