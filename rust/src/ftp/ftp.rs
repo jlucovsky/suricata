@@ -29,6 +29,7 @@ use crate::applayer::{
 };
 use crate::conf::{conf_get, get_memval};
 use crate::core::{ALPROTO_FAILED, ALPROTO_UNKNOWN, IPPROTO_TCP, STREAM_TOCLIENT, STREAM_TOSERVER};
+use crate::direction::Direction;
 use crate::flow::{flow_get_alproto_tc, flow_get_alproto_ts, flow_get_todst_bytecount, Flow};
 use crate::ftp::constant::*;
 use crate::ftp::event::FtpEvent;
@@ -675,11 +676,12 @@ impl FtpState {
                     }
 
                     // None only when deque is empty (banner before any command).
-                    let tx_id = if let Some(tx) = self.get_oldest_tx_mut() {
-                        tx.tx_id
-                    } else {
-                        self.new_tx()
-                    };
+                    let (tx_id, tx_is_response_only) =
+                        if let Some(tx) = self.get_oldest_tx_mut() {
+                            (tx.tx_id, false)
+                        } else {
+                            (self.new_tx(), true)
+                        };
 
                     // Locals to carry state updates past the tx borrow.
                     let mut new_active_port: u16 = 0;
@@ -692,7 +694,16 @@ impl FtpState {
                         .find(|tx| tx.tx_id == tx_id)
                         .unwrap();
 
-                    tx.tx_data.0.updated_tc = true;
+                    if tx_is_response_only {
+                        // No corresponding request (e.g. the initial banner):
+                        // this is a TC-only tx.  for_direction(ToClient) sets
+                        // updated_tc=true and SKIP_INSPECT_TS in one go, so
+                        // firewall-mode rules aren't stuck waiting for a
+                        // request that will never come.
+                        tx.tx_data = AppLayerTxData::for_direction(Direction::ToClient);
+                    } else {
+                        tx.tx_data.0.updated_tc = true;
+                    }
                     // A truncated reply is unusable; treat as "not received" for
                     // the ftp.reply_received keyword so detection rules fire correctly.
                     if !truncated {
