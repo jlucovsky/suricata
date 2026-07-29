@@ -50,15 +50,17 @@ bool SCFTPDataExpectCreate(Flow *f, const uint8_t *file_name, uint32_t file_name
     SCFTPIncrMemuse((uint64_t)sizeof(*data));
     data->data_free = SCFTPTransferCmdDataFree;
 
-    uint32_t fname_len = MIN(SC_FILENAME_MAX - 1, file_name_len);
-    data->file_name = FTPCalloc(fname_len + 1, sizeof(char));
-    if (data->file_name == NULL) {
-        SCFTPTransferCmdDataFree(data);
-        return false;
+    if (file_name_len > 0) {
+        uint32_t fname_len = MIN(SC_FILENAME_MAX - 1, file_name_len);
+        data->file_name = FTPCalloc(fname_len + 1, sizeof(char));
+        if (data->file_name == NULL) {
+            SCFTPTransferCmdDataFree(data);
+            return false;
+        }
+        data->file_name[fname_len] = 0;
+        data->file_len = (uint16_t)fname_len;
+        memcpy(data->file_name, file_name, fname_len);
     }
-    data->file_name[fname_len] = 0;
-    data->file_len = (uint16_t)fname_len;
-    memcpy(data->file_name, file_name, fname_len);
     data->cmd = cmd;
     data->flow_id = FlowGetId(f);
     data->direction = direction;

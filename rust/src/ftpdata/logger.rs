@@ -33,8 +33,23 @@ fn log_ftp_data(state: &FtpDataState, js: &mut JsonBuilder) -> Result<(), JsonEr
         FtpRequestCommand::FTP_COMMAND_STOR => {
             js.set_string("command", "STOR")?;
         }
+        FtpRequestCommand::FTP_COMMAND_APPE => {
+            js.set_string("command", "APPE")?;
+        }
+        FtpRequestCommand::FTP_COMMAND_STOU => {
+            js.set_string("command", "STOU")?;
+        }
         FtpRequestCommand::FTP_COMMAND_RETR => {
             js.set_string("command", "RETR")?;
+        }
+        FtpRequestCommand::FTP_COMMAND_NLST => {
+            js.set_string("command", "NLST")?;
+        }
+        FtpRequestCommand::FTP_COMMAND_LIST => {
+            js.set_string("command", "LIST")?;
+        }
+        FtpRequestCommand::FTP_COMMAND_MLSD => {
+            js.set_string("command", "MLSD")?;
         }
         _ => {}
     }

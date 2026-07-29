@@ -80,6 +80,9 @@ pub struct FtpDataState {
     /// Direction the file data flows (STREAM_TOSERVER or STREAM_TOCLIENT).
     pub direction: u8,
     pub progress: u8,
+    /// True once the expectation has been consumed and command/direction
+    /// stored.  Not all commands open a file (e.g. NLST).
+    initialized: bool,
     /// True once the file has been opened via FileOpenFileWithId.
     files_opened: bool,
 }
@@ -94,6 +97,7 @@ impl FtpDataState {
             command: FtpRequestCommand::FTP_COMMAND_UNKNOWN,
             direction: 0,
             progress: FTPDATA_IN_PROGRESS,
+            initialized: false,
             files_opened: false,
         }
     }
@@ -122,7 +126,7 @@ impl FtpDataState {
         let flags = SCFileFlowFlagsToFlags(self.tx_data.0.file_flags, direction);
         let mut ret: c_int = 0;
 
-        if !input.is_empty() && !self.files_opened {
+        if !input.is_empty() && !self.initialized {
             // First data: retrieve transfer info from flow expectation storage.
             let data = SCFTPDataFlowGetTransferCmd(flow);
             if data.is_null() {
@@ -142,8 +146,23 @@ impl FtpDataState {
                 x if x == FtpRequestCommand::FTP_COMMAND_STOR as u8 => {
                     FtpRequestCommand::FTP_COMMAND_STOR
                 }
+                x if x == FtpRequestCommand::FTP_COMMAND_APPE as u8 => {
+                    FtpRequestCommand::FTP_COMMAND_APPE
+                }
+                x if x == FtpRequestCommand::FTP_COMMAND_STOU as u8 => {
+                    FtpRequestCommand::FTP_COMMAND_STOU
+                }
                 x if x == FtpRequestCommand::FTP_COMMAND_RETR as u8 => {
                     FtpRequestCommand::FTP_COMMAND_RETR
+                }
+                x if x == FtpRequestCommand::FTP_COMMAND_NLST as u8 => {
+                    FtpRequestCommand::FTP_COMMAND_NLST
+                }
+                x if x == FtpRequestCommand::FTP_COMMAND_LIST as u8 => {
+                    FtpRequestCommand::FTP_COMMAND_LIST
+                }
+                x if x == FtpRequestCommand::FTP_COMMAND_MLSD as u8 => {
+                    FtpRequestCommand::FTP_COMMAND_MLSD
                 }
                 _ => FtpRequestCommand::FTP_COMMAND_UNKNOWN,
             };
@@ -180,7 +199,7 @@ impl FtpDataState {
             if self.progress == FTPDATA_FINISHED {
                 return AppLayerResult::ok();
             }
-            if !input.is_empty() {
+            if self.files_opened && !input.is_empty() {
                 ret = FileAppendData(
                     &mut self.files, sbcfg, input.as_ptr(),
                     u32::try_from(input.len()).unwrap_or(u32::MAX),
@@ -192,8 +211,10 @@ impl FtpDataState {
             }
         }
 
-        if self.files_opened && eof {
-            ret = FileCloseFileById(&mut self.files, sbcfg, 0, ptr::null(), 0, flags);
+        if eof {
+            if self.files_opened {
+                ret = FileCloseFileById(&mut self.files, sbcfg, 0, ptr::null(), 0, flags);
+            }
             self.progress = FTPDATA_FINISHED;
         }
 

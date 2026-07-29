@@ -121,6 +121,7 @@ impl FtpRequestCommand {
             b"MDTM" => Self::FTP_COMMAND_MDTM,
             b"MKD" => Self::FTP_COMMAND_MKD,
             b"MLFL" => Self::FTP_COMMAND_MLFL,
+            b"MLSD" => Self::FTP_COMMAND_MLSD,
             b"MODE" => Self::FTP_COMMAND_MODE,
             b"MRCP" => Self::FTP_COMMAND_MRCP,
             b"MRSQ" => Self::FTP_COMMAND_MRSQ,

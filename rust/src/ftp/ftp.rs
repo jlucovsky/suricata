@@ -566,13 +566,28 @@ impl FtpState {
                         }
                     }
 
-                    // STOR/RETR: queue an FTP-DATA expectation.  Emit
-                    // file_before_port / file_without_name events on the tx
-                    // instead of erroring, matching the C behaviour.
-                    if command == FtpRequestCommand::FTP_COMMAND_STOR
-                        || command == FtpRequestCommand::FTP_COMMAND_RETR
-                    {
-                        if arg_offset >= line.len() {
+                    // STOR/RETR need a file name; NLST does not.  All three
+                    // need a negotiated dynamic port.  Emit file_before_port
+                    // / file_without_name events on the tx instead of erroring,
+                    // matching the C behaviour.
+                    let requires_file = matches!(
+                        command,
+                        FtpRequestCommand::FTP_COMMAND_STOR
+                            | FtpRequestCommand::FTP_COMMAND_APPE
+                            | FtpRequestCommand::FTP_COMMAND_RETR
+                    );
+                    // STOU may or may not carry a filename; NLST/LIST/MLSD
+                    // never do.
+                    let is_data_cmd = requires_file
+                        || matches!(
+                            command,
+                            FtpRequestCommand::FTP_COMMAND_NLST
+                                | FtpRequestCommand::FTP_COMMAND_LIST
+                                | FtpRequestCommand::FTP_COMMAND_MLSD
+                                | FtpRequestCommand::FTP_COMMAND_STOU
+                        );
+                    if is_data_cmd {
+                        if requires_file && arg_offset >= line.len() {
                             let tx = self.transactions.back_mut().unwrap();
                             tx.tx_data
                                 .set_event(FtpEvent::FtpEventFileWithoutName as u8);
@@ -581,17 +596,42 @@ impl FtpState {
                             tx.tx_data.set_event(FtpEvent::FtpEventFileBeforePort as u8);
                         } else {
                             // Mirror the direction logic from the C FTPParseRequest:
-                            // active+STOR or passive+RETR => TOCLIENT; else TOSERVER.
-                            let direction = if (self.curr_active
-                                && command == FtpRequestCommand::FTP_COMMAND_STOR)
-                                || (!self.curr_active
-                                    && command == FtpRequestCommand::FTP_COMMAND_RETR)
+                            // active+STOR or passive+(RETR|NLST) => TOCLIENT; else TOSERVER.
+                            // Server-to-client for STOR in active mode, and
+                            // for any of RETR/NLST/LIST/MLSD in passive mode.
+                            let server_to_client = matches!(
+                                command,
+                                FtpRequestCommand::FTP_COMMAND_RETR
+                                    | FtpRequestCommand::FTP_COMMAND_NLST
+                                    | FtpRequestCommand::FTP_COMMAND_LIST
+                                    | FtpRequestCommand::FTP_COMMAND_MLSD
+                            );
+                            // STOR/APPE/STOU in active mode: server initiates
+                            // the data connection, so the upload flows
+                            // TOCLIENT from the FTP-DATA flow's perspective.
+                            let active_upload = matches!(
+                                command,
+                                FtpRequestCommand::FTP_COMMAND_STOR
+                                    | FtpRequestCommand::FTP_COMMAND_APPE
+                                    | FtpRequestCommand::FTP_COMMAND_STOU
+                            );
+                            let direction = if (self.curr_active && active_upload)
+                                || (!self.curr_active && server_to_client)
                             {
                                 STREAM_TOCLIENT
                             } else {
                                 STREAM_TOSERVER
                             };
-                            let file_name = line[arg_offset..].to_vec();
+                            let file_name = if arg_offset < line.len() {
+                                line[arg_offset..].to_vec()
+                            } else if command == FtpRequestCommand::FTP_COMMAND_STOU {
+                                // STOU without a client-provided filename:
+                                // the server picks one, but we need a
+                                // placeholder for file storage / detection.
+                                b"<stou>".to_vec()
+                            } else {
+                                Vec::new()
+                            };
                             self.pending_expectations.push(PendingExpectation {
                                 file_name,
                                 cmd: command as u8,
