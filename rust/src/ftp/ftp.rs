@@ -565,17 +565,23 @@ impl FtpState {
                         }
                     }
 
-                    // STOR/RETR: queue an FTP-DATA expectation when we have a
-                    // confirmed dynamic port and a non-empty file name argument.
-                    if (command == FtpRequestCommand::FTP_COMMAND_STOR
-                        || command == FtpRequestCommand::FTP_COMMAND_RETR)
-                        && self.curr_dyn_port != 0
-                        && arg_offset < line.len()
+                    // STOR/RETR: queue an FTP-DATA expectation.  Emit
+                    // file_before_port / file_without_name events on the tx
+                    // instead of erroring, matching the C behaviour.
+                    if command == FtpRequestCommand::FTP_COMMAND_STOR
+                        || command == FtpRequestCommand::FTP_COMMAND_RETR
                     {
-                        // Mirror the direction logic from the C FTPParseRequest:
-                        // active+STOR or passive+RETR => TOCLIENT; else TOSERVER.
-                        let direction =
-                            if (self.curr_active
+                        if arg_offset >= line.len() {
+                            let tx = self.transactions.back_mut().unwrap();
+                            tx.tx_data
+                                .set_event(FtpEvent::FtpEventFileWithoutName as u8);
+                        } else if self.curr_dyn_port == 0 {
+                            let tx = self.transactions.back_mut().unwrap();
+                            tx.tx_data.set_event(FtpEvent::FtpEventFileBeforePort as u8);
+                        } else {
+                            // Mirror the direction logic from the C FTPParseRequest:
+                            // active+STOR or passive+RETR => TOCLIENT; else TOSERVER.
+                            let direction = if (self.curr_active
                                 && command == FtpRequestCommand::FTP_COMMAND_STOR)
                                 || (!self.curr_active
                                     && command == FtpRequestCommand::FTP_COMMAND_RETR)
@@ -584,15 +590,16 @@ impl FtpState {
                             } else {
                                 STREAM_TOSERVER
                             };
-                        let file_name = line[arg_offset..].to_vec();
-                        self.pending_expectations.push(PendingExpectation {
-                            file_name,
-                            cmd: command as u8,
-                            direction,
-                            dyn_port: self.curr_dyn_port,
-                        });
-                        self.curr_dyn_port = 0;
-                        self.curr_active = false;
+                            let file_name = line[arg_offset..].to_vec();
+                            self.pending_expectations.push(PendingExpectation {
+                                file_name,
+                                cmd: command as u8,
+                                direction,
+                                dyn_port: self.curr_dyn_port,
+                            });
+                            self.curr_dyn_port = 0;
+                            self.curr_active = false;
+                        }
                     }
                 }
             }
