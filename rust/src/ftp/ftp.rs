@@ -418,24 +418,27 @@ impl FtpState {
         }
     }
 
-    /// Create a new transaction, reaping the oldest incomplete one if at the limit.
-    fn new_tx(&mut self) -> u64 {
+    /// Create a new transaction.  When at the max-tx limit, mark the oldest
+    /// incomplete transaction done + tag it with the too_many_transactions
+    /// event, and return None: refusing to grow the transaction list under
+    /// pressure avoids quadratic behaviour on bursty inputs.  Once the
+    /// upper layer frees completed transactions, len() drops and creation
+    /// resumes.
+    fn new_tx(&mut self) -> Option<u64> {
         if self.transactions.len() >= self.config.max_tx as usize {
-            // Mirror SMB behavior: mark the oldest incomplete tx done and tag it
-            // with the event, then fall through and create the new tx so the flow
-            // continues.  One stale tx is reaped per overflow, keeping memory bounded.
             if let Some(tx) = self.transactions.iter_mut().find(|tx| !tx.complete) {
                 tx.complete = true;
                 tx.tx_data.0.updated_ts = true;
                 tx.tx_data.0.updated_tc = true;
                 tx.tx_data.set_event(FtpEvent::FtpEventTooManyTransactions as u8);
             }
+            return None;
         }
 
         self.tx_cnt += 1;
         let tx_id = self.tx_cnt;
         self.transactions.push_back(FtpTransaction::new(tx_id));
-        tx_id
+        Some(tx_id)
     }
 
     /// Return the oldest incomplete (not-yet-done) transaction, or the oldest
@@ -513,7 +516,12 @@ impl FtpState {
                     }
 
                     // Create transaction; accessed via back_mut() below.
-                    self.new_tx();
+                    // Skip the request line if we're at the tx cap: the
+                    // too_many_transactions event has already been attached
+                    // to the reaped oldest tx.
+                    if self.new_tx().is_none() {
+                        continue;
+                    }
 
                     {
                         let tx = self.transactions.back_mut().unwrap();
@@ -674,11 +682,15 @@ impl FtpState {
                     }
 
                     // None only when deque is empty (banner before any command).
+                    // If new_tx also fails (at max-tx), drop the response line;
+                    // there is no tx to attach it to.
                     let (tx_id, tx_is_response_only) =
                         if let Some(tx) = self.get_oldest_tx_mut() {
                             (tx.tx_id, false)
+                        } else if let Some(id) = self.new_tx() {
+                            (id, true)
                         } else {
-                            (self.new_tx(), true)
+                            continue;
                         };
 
                     // Locals to carry state updates past the tx borrow.
