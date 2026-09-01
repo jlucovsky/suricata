@@ -284,7 +284,6 @@ pub struct FtpTransaction {
     pub active: bool,
     /// All response lines for this command.
     pub responses: Vec<FtpResponseLine>,
-    pub reply_received: bool,
     pub reply_truncated: bool,
     /// Transaction is complete (final non-preliminary reply received).
     pub complete: bool,
@@ -303,7 +302,6 @@ impl FtpTransaction {
             dyn_port: 0,
             active: false,
             responses: Vec::new(),
-            reply_received: false,
             reply_truncated: false,
             complete: false,
             // Use Default (all zeros) rather than AppLayerTxData::new(),
@@ -704,11 +702,10 @@ impl FtpState {
                     } else {
                         tx.tx_data.0.updated_tc = true;
                     }
-                    // A truncated reply is unusable; treat as "not received" for
-                    // the ftp.reply_received keyword so detection rules fire correctly.
-                    if !truncated {
-                        tx.reply_received = true;
-                    } else {
+                    // reply_received is derived from tx.complete at match /
+                    // log time (matching upstream tx->done semantics);
+                    // truncated is a separate independent signal.
+                    if truncated {
                         tx.reply_truncated = true;
                         tx.tx_data
                             .set_event(FtpEvent::FtpEventResponseCommandTooLong as u8);
@@ -1216,13 +1213,14 @@ mod tests {
     fn test_tx_count_limit() {
         let mut state = make_state();
         state.config.max_tx = 2;
-        // Slots fill with USER and PASS. On the third command the oldest incomplete
-        // tx is reaped and tagged with the event, then the new tx is created — the
-        // flow continues rather than halting.
+        // Slots fill with USER and PASS.  On the third command we hit the
+        // limit: the oldest incomplete tx is reaped and tagged with the
+        // event, and NO new tx is created (matches upstream tx-cap fix
+        // 82c4190558 -- avoids quadratic growth on bursts).
         assert!(state.parse_request(b"USER a\r\n").is_ok());
         assert!(state.parse_request(b"PASS b\r\n").is_ok());
         assert!(state.parse_request(b"NOOP\r\n").is_ok());
-        assert_eq!(state.tx_cnt, 3);
+        assert_eq!(state.tx_cnt, 2);
         // The first tx (USER) should have been reaped and carry the event.
         let tx = state.get_transaction(0).unwrap();
         assert!(tx.complete);

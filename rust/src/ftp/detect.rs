@@ -167,7 +167,9 @@ pub unsafe extern "C" fn SCFTPDetectReplyReceivedMatch(
         return false;
     }
     let d = &*data;
-    d.received == tx.reply_received
+    // Match upstream tx->done semantics: a reply is "received" once the
+    // final (non-preliminary, non-continuation) response line arrives.
+    d.received == tx.complete
 }
 
 // ─── ftp.dynamic_port match ───────────────────────────────────────────────────
@@ -298,7 +300,7 @@ mod tests {
     #[test]
     fn test_reply_received_match() {
         let mut tx = make_user_tx();
-        tx.reply_received = true;
+        tx.complete = true;
         let d = DetectFtpReplyReceivedData { received: true };
         let result = unsafe { SCFTPDetectReplyReceivedMatch(&tx, &d) };
         assert!(result);

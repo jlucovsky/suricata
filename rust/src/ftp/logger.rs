@@ -95,8 +95,9 @@ fn log_ftp(tx: &FtpTransaction, js: &mut JsonBuilder) -> Result<(), JsonError> {
         _ => {}
     }
 
-    // Reply received.
-    if tx.reply_received {
+    // Reply received.  Match upstream output-json-ftp.c: derived from
+    // tx->done (our tx.complete), not from having seen any response line.
+    if tx.complete {
         js.set_string("reply_received", "yes")?;
     } else {
         js.set_string("reply_received", "no")?;
@@ -141,7 +142,6 @@ mod tests {
         tx.request = Some(b"USER testuser".to_vec());
         tx.arg_offset = 5;
         tx.complete = true;
-        tx.reply_received = true;
         tx.responses.push(FtpResponseLine {
             code: 331,
             is_continuation: false,
@@ -209,7 +209,6 @@ mod tests {
         tx.request = Some(b"USER testuser".to_vec());
         tx.arg_offset = 5;
         tx.complete = true;
-        tx.reply_received = true;
         tx.responses.push(FtpResponseLine {
             code: 331,
             is_continuation: false,
@@ -239,7 +238,6 @@ mod tests {
         // The continuation line is stored with its raw "211-..." form.
         let mut tx = FtpTransaction::new(1);
         tx.complete = true;
-        tx.reply_received = true;
         tx.responses.push(FtpResponseLine {
             code: 211,
             is_continuation: true,
