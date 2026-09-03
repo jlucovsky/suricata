@@ -119,7 +119,7 @@ void DetectFtpReplyReceivedRegister(void)
     sigmatch_table[DETECT_FTP_REPLY_RECEIVED].Free = DetectFtpReplyReceivedFree;
     sigmatch_table[DETECT_FTP_REPLY_RECEIVED].flags = SIGMATCH_SUPPORT_FIREWALL;
 
-    DetectAppLayerInspectEngineRegister("ftp.reply_received", ALPROTO_FTP, SIG_FLAG_TOCLIENT,
-            FTP_STATE_FINISHED, DetectEngineInspectGenericList, NULL);
+    DetectAppLayerInspectEngineRegister("ftp.reply_received", ALPROTO_FTP, SIG_FLAG_TOCLIENT, 0,
+            DetectEngineInspectGenericList, NULL);
     g_ftp_reply_received_buffer_id = DetectBufferTypeGetByName("ftp.reply_received");
 }

@@ -305,7 +305,12 @@ impl FtpTransaction {
             reply_received: false,
             reply_truncated: false,
             complete: false,
-            tx_data: AppLayerTxData::new(),
+            // Use Default (all zeros) rather than AppLayerTxData::new(),
+            // which pre-sets updated_tc and updated_ts to true.  parse_request
+            // sets updated_ts on tx creation; parse_response sets updated_tc.
+            // Pre-setting both would cause detection to run TC-side engines
+            // on TS-only packets and fire spurious early alerts.
+            tx_data: AppLayerTxData(Default::default()),
         }
     }
 }
@@ -824,6 +829,14 @@ pub unsafe extern "C" fn SCFTPParseRequest(
         );
     }
 
+    // Match upstream: trigger raw-stream inspection after processing
+    // request-side data.  Without this, detection scheduling for the
+    // opposite direction can be off (visible as spurious early alerts on
+    // TC-direction engines).
+    suricata_sys::sys::SCAppLayerParserTriggerRawStreamInspection(
+        flow, STREAM_TOSERVER as c_int,
+    );
+
     result
 }
 
@@ -858,6 +871,13 @@ pub unsafe extern "C" fn SCFTPParseResponse(
         state.auth_tls = AuthTlsState::Idle;
         SCAppLayerRequestProtocolTLSUpgrade(flow);
     }
+
+    // Match upstream: trigger raw-stream inspection after processing
+    // response-side data (upstream calls this each time a tx transitions
+    // to done).
+    suricata_sys::sys::SCAppLayerParserTriggerRawStreamInspection(
+        flow, STREAM_TOCLIENT as c_int,
+    );
 
     result
 }
