@@ -318,6 +318,20 @@ impl Transaction for FtpTransaction {
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
+/// AUTH TLS handshake state.  The client sends `AUTH TLS`, the server
+/// replies `234`, and only then does the flow upgrade to TLS.  These
+/// stages don't correspond to any transaction, so they're tracked here.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum AuthTlsState {
+    /// No AUTH TLS handshake in progress.
+    Idle,
+    /// Client sent `AUTH TLS`; awaiting server response.
+    Requested,
+    /// Server sent `234`; parse_response should trigger TLS upgrade
+    /// once the Flow pointer is available.
+    Confirmed,
+}
+
 pub struct FtpState {
     pub state_data: AppLayerStateData,
     pub transactions: VecDeque<FtpTransaction>,
@@ -334,12 +348,9 @@ pub struct FtpState {
     /// Expectations queued during parse_request; created in SCFTPParseRequest
     /// where the Flow pointer is available.
     pending_expectations: Vec<PendingExpectation>,
-    /// Set when the server confirms AUTH TLS (234); acted on in SCFTPParseResponse.
-    pending_tls_upgrade: bool,
-    /// Set when AUTH TLS is seen in parse_request; cleared when 234 is received
-    /// in parse_response.  AUTH TLS does not create a transaction, so the upgrade
-    /// must be tracked here instead of via the transaction's command field.
-    pending_auth_tls: bool,
+    /// AUTH TLS handshake state.  AUTH TLS does not create a transaction, so
+    /// the multi-step upgrade must be tracked at state level.
+    auth_tls: AuthTlsState,
     /// Set while accumulating a multi-line response (code seen with '-' separator).
     /// Cleared when the matching final line (same code, ' ' separator) arrives.
     response_multiline_code: Option<u16>,
@@ -378,8 +389,7 @@ impl FtpState {
             curr_dyn_port: 0,
             curr_active: false,
             pending_expectations: Vec::new(),
-            pending_tls_upgrade: false,
-            pending_auth_tls: false,
+            auth_tls: AuthTlsState::Idle,
             response_multiline_code: None,
         }
     }
@@ -489,7 +499,7 @@ impl FtpState {
                     // AUTH TLS does not create a transaction: track the upgrade
                     // signal at state level so parse_response can detect 234.
                     if matches!(command, FtpRequestCommand::FTP_COMMAND_AUTH_TLS) {
-                        self.pending_auth_tls = true;
+                        self.auth_tls = AuthTlsState::Requested;
                         continue;
                     }
                     // Unknown commands don't produce events; skip transaction creation
@@ -649,11 +659,14 @@ impl FtpState {
                             }
                         };
 
-                    // AUTH TLS 234 upgrade: detected via state flag because AUTH TLS
-                    // does not create a transaction.
-                    if code == 234 && self.pending_auth_tls {
-                        self.pending_tls_upgrade = true;
-                        self.pending_auth_tls = false;
+                    // AUTH TLS 234 upgrade: detected via state field because
+                    // AUTH TLS does not create a transaction.
+                    if self.auth_tls == AuthTlsState::Requested {
+                        if code == 234 {
+                            self.auth_tls = AuthTlsState::Confirmed;
+                        } else {
+                            self.auth_tls = AuthTlsState::Idle;
+                        }
                     }
 
                     // None only when deque is empty (banner before any command).
@@ -841,8 +854,8 @@ pub unsafe extern "C" fn SCFTPParseResponse(
 
     // If the server confirmed AUTH TLS (234), request a TLS upgrade now that
     // we have the Flow pointer.
-    if state.pending_tls_upgrade {
-        state.pending_tls_upgrade = false;
+    if state.auth_tls == AuthTlsState::Confirmed {
+        state.auth_tls = AuthTlsState::Idle;
         SCAppLayerRequestProtocolTLSUpgrade(flow);
     }
 
@@ -1270,11 +1283,11 @@ mod tests {
 
     #[test]
     fn test_parse_request_auth_tls() {
-        // AUTH TLS does not create a transaction; it sets pending_auth_tls.
+        // AUTH TLS does not create a transaction; it sets auth_tls to Requested.
         let mut state = make_state();
         assert!(state.parse_request(b"AUTH TLS\r\n").is_ok());
         assert!(state.transactions.is_empty());
-        assert!(state.pending_auth_tls);
+        assert_eq!(state.auth_tls, AuthTlsState::Requested);
     }
 
     #[test]
